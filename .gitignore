@@ -1,0 +1,14 @@
+# Ignore python virtual environments
+venv/
+__pycache__/
+*.pyc
+
+# Ignore ALL raw data files (Massive CSVs/GMLs)
+*.csv
+*.CSV
+*.gml
+*.gfs
+
+# Ignore local configuration or IDE files
+.vscode/
+.idea/
