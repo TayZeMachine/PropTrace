@@ -103,3 +103,29 @@ Semantic HTTP Protocol Selection: Enforced a strict conditional boundary: if a q
 
 4. Route 2 Architectural Implementation (Spatial Viewport Engine)
 I designed and deployed the core geospatial endpoint at /api/spatial/parcels to serve vector streams dynamically to the client interface.
+
+# Spatial Viewport Boundary Processing Snippet
+bbox_envelope_4326 = ST_MakeEnvelope(min_lng, min_lat, max_lng, max_lat, 4326)
+bbox_area_meters = db.session.query(ST_Area(ST_Transform(bbox_envelope_4326, 27700))).scalar()
+
+# Performance safety trigger: Reject queries if the viewport area is too massive
+if bbox_area_meters > 5000000:  # 5 square kilometers
+    return jsonify({
+        "status": "warning",
+        "message": "Viewport area too massive. Please zoom in further.",
+        "area_sqm": bbox_area_meters
+    }), 200
+
+# Optimized spatial join intersection query
+query_results = db.session.query(
+    BirminghamGeometry.inspireid,
+    ST_AsGeoJSON(ST_Transform(BirminghamGeometry.geometry, 4326)).label('geojson_geom')
+).filter(
+    ST_Intersects(BirminghamGeometry.geometry, ST_Transform(bbox_envelope_4326, 27700))
+).limit(150).all()
+
+Coordinate System Projections (SRID 4326 ⇄ 27700): The route captures four coordinate points from the browser viewport, constructs a bounding box tracking envelope using global degrees (SRID 4326), and instantly maps it using ST_Transform into flat SRID 27700 (British National Grid meters) to calculate exact real-world surface parameters.
+
+Memory Safeguard Constraint: To prevent server thread resource exhaustion or browser rendering lag when zoomed out to macro scales, I engineered a short-circuit performance gate. If the screen envelope area bounds exceed 5 square kilometers, the query halts execution immediately and issues a warning payload.
+
+Relational Spatial Joins & GeoJSON Serialization: For safe scales, the engine executes a multi-schema join matching the database geometry schema layer to the core text table attributes via the UPRN anchor (BirminghamProperty.uprn == BirminghamGeometry.inspireid). It queries the table using an ST_Intersects condition filter and wraps the returned spatial boundaries inside an inline ST_AsGeoJSON compiler, outputting an industry-standard, fully serialized GeoJSON FeatureCollection capped at .limit(150) for rendering stability.
