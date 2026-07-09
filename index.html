@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PropTrace MSC - Live Spatial Workspace</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.1.0/mapbox-gl.js"></script>
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.1.0/mapbox-gl.css" rel="stylesheet" />
+    <style>
+        body { overflow: hidden; }
+        .sidebar-scroll { max-height: calc(100vh - 180px); overflow-y: auto; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans h-screen flex flex-col">
+
+    <header class="bg-slate-900 border-b border-slate-800 px-6 py-4 flex items-center justify-between z-10 shrink-0">
+        <div class="flex items-center space-x-3">
+            <div class="bg-blue-600 p-2 rounded-lg text-white">
+                <i class="fa-solid fa-layer-group text-lg"></i>
+            </div>
+            <div>
+                <h1 class="text-md font-bold tracking-tight text-white">PropTrace MSC</h1>
+                <p class="text-[11px] text-slate-400">Live PostGIS Spatial Analytics Engine</p>
+            </div>
+        </div>
+        
+        <div class="flex items-center space-x-4 text-xs">
+            <div class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 font-mono flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span>API Localhost Active</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 flex overflow-hidden relative">
+        
+        <div id="map" class="absolute inset-0 w-full h-full bg-slate-950"></div>
+
+        <div class="absolute right-4 top-4 bottom-4 w-96 bg-slate-900/95 border border-slate-800 rounded-xl p-5 shadow-2xl backdrop-blur-md z-10 flex flex-col space-y-4">
+            <div>
+                <h3 class="text-xs font-bold tracking-widest text-slate-400 uppercase">Selected Asset Property</h3>
+                <p class="text-[11px] text-slate-500 mt-0.5">Click any parcel boundary on the map to query the database</p>
+            </div>
+
+            <div id="inspect-panel" class="bg-slate-950 border border-slate-850 rounded-lg p-4 space-y-3 flex-1 sidebar-scroll">
+                <div class="text-center py-8 text-slate-500 text-xs" id="no-selection-notice">
+                    <i class="fa-solid fa-hand-pointer text-xl mb-2 text-slate-600 block"></i>
+                    No active property selected
+                </div>
+
+                <div id="selection-data" class="hidden space-y-3 text-xs">
+                    <div class="flex justify-between py-1 border-b border-slate-850">
+                        <span class="text-slate-400">Inspire ID:</span>
+                        <span id="data-inspire" class="font-mono font-semibold text-white"></span>
+                    </div>
+                    <div class="flex justify-between py-1 border-b border-slate-850">
+                        <span class="text-slate-400">Status Layer:</span>
+                        <span id="data-status" class="text-blue-400 font-semibold"></span>
+                    </div>
+                    
+                    <div class="mt-4 pt-4 border-t border-slate-800">
+                        <span class="text-[10px] bg-blue-500/10 border border-blue-500/20 text-blue-400 font-bold px-2 py-0.5 rounded uppercase tracking-wider">Phase 4 Preview</span>
+                        <p class="text-[11px] text-slate-400 mt-2">Next phase we will link these geometric IDs to join attribute text entries.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-slate-950 border border-slate-850 rounded-lg p-3 font-mono text-[10px] text-slate-400 space-y-1">
+                <p class="text-slate-500 uppercase font-bold text-[9px] mb-1">Active Viewport Box:</p>
+                <div id="log-bounds" class="truncate text-blue-400">Panned/Zoom parameters loading...</div>
+                <div id="log-count" class="text-emerald-400">Features in view: 0</div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // 🚨 ACTIVE ACCESS TOKEN
+        mapboxgl.accessToken = 'pk.eyJ1IjoidGF5YWIxMjMiLCJhIjoiY21yNjk1YWhpMGRtczJ5cjBkbDdkeHh4YyJ9.wqtBmgsI2K_hu0I-eF0RwA';
+
+        // Initialize Mapbox View Container
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/dark-v11', 
+            center: [-1.9122, 52.5036], 
+            zoom: 16.2  
+        });
+
+        let selectedFeatureId = null;
+
+        map.addControl(new mapboxgl.NavigationControl(), 'top-left');
+
+        map.on('load', () => {
+            map.addSource('birmingham-parcels-source', {
+                type: 'geojson',
+                data: { type: 'FeatureCollection', features: [] },
+                generateId: true 
+            });
+
+            map.addLayer({
+                id: 'parcels-layer-fill',
+                type: 'fill',
+                source: 'birmingham-parcels-source',
+                paint: {
+                    'fill-color': '#3b82f6', 
+                    'fill-opacity': 0.4,
+                    'fill-outline-color': '#60a5fa'
+                }
+            });
+
+            map.addLayer({
+                id: 'parcels-layer-highlight',
+                type: 'line',
+                source: 'birmingham-parcels-source',
+                paint: {
+                    'line-color': '#06b6d4', 
+                    'line-width': [
+                        'case',
+                        ['boolean', ['feature-state', 'selected'], false],
+                        3.5, 
+                        0 
+                    ]
+                }
+            });
+
+            map.addLayer({
+                id: 'parcels-layer-outline',
+                type: 'line',
+                source: 'birmingham-parcels-source',
+                paint: {
+                    'line-color': '#2563eb',
+                    'line-width': 1
+                }
+            });
+
+            fetchParcelsInViewport();
+
+            map.on('moveend', () => {
+                fetchParcelsInViewport();
+            });
+        });
+
+        function fetchParcelsInViewport() {
+            const bounds = map.getBounds();
+            const min_lng = bounds.getWest();
+            const min_lat = bounds.getSouth();
+            const max_lng = bounds.getEast();
+            const max_lat = bounds.getNorth();
+
+            document.getElementById('log-bounds').innerText = `Lng: ${min_lng.toFixed(3)} to ${max_lng.toFixed(3)}\nLat: ${min_lat.toFixed(3)} to ${max_lat.toFixed(3)}`;
+
+            const url = `http://127.0.0.1:5000/api/spatial/parcels?min_lng=${min_lng}&min_lat=${min_lat}&max_lng=${max_lng}&max_lat=${max_lat}`;
+
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.type === 'FeatureCollection') {
+                        map.getSource('birmingham-parcels-source').setData(data);
+                        
+                        if (data.message) {
+                            document.getElementById('log-count').innerText = data.message;
+                        } else {
+                            document.getElementById('log-count').innerText = `Features in view: ${data.count || 0}`;
+                        }
+                    }
+                })
+                .catch(err => {
+                    console.error("API Fetch Integration error:", err);
+                    document.getElementById('log-count').innerText = "🔴 API Connection Error";
+                });
+        }
+
+        map.on('click', 'parcels-layer-fill', (e) => {
+            if (!e.features.length) return;
+
+            if (selectedFeatureId !== null) {
+                map.setFeatureState(
+                    { source: 'birmingham-parcels-source', id: selectedFeatureId },
+                    { selected: false }
+                );
+            }
+
+            const clickedFeature = e.features[0];
+            selectedFeatureId = clickedFeature.id; 
+
+            map.setFeatureState(
+                { source: 'birmingham-parcels-source', id: selectedFeatureId },
+                { selected: true }
+            );
+
+            const props = clickedFeature.properties;
+
+            document.getElementById('no-selection-notice').classList.add('hidden');
+            document.getElementById('selection-data').classList.remove('hidden');
+
+            document.getElementById('data-inspire').innerText = props.inspireid || "Not Found";
+            document.getElementById('data-status').innerText = props.status || "Active Connection";
+        });
+
+        map.on('mouseenter', 'parcels-layer-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'parcels-layer-fill', () => { map.getCanvas().style.cursor = ''; });
+    </script>
+</body>
+</html>
