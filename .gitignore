@@ -12,3 +12,5 @@ __pycache__/
 # Ignore local configuration or IDE files
 .vscode/
 .idea/
+
+data/
