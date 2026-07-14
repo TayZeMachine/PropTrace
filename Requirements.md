@@ -22,10 +22,10 @@ FR5: Map Viewport Searching
  The map system must capture the four corners of the user's current screen view (`min_lng`, `min_lat`, `max_lng`, `max_lat`). It must translate these global coordinates into British National Grid meters (SRID 27700) and run a fast database search to find and display all the matching property boundary shapes inside that specific view.
 
 FR6: Non-Compensatory Algorithmic Circuit Breaker (Stage 1 Risk)
-  The core decision engine MUST run a preliminary non compensatory check on property tenure and financial layout constraints. If an absolute structural friction point is matched (e.g., Leasehold tenure paired with a high-holding-cost Council Tax Band G or H), the system MUST trigger an immediate circuit breaker, bypassing standard additive calculations to hardcode the risk score to a maximum value of `1.00` (RED classification status)
+  The core decision engine, governed by Jacek Malczewski's Multi-Criteria Decision Analysis (MCDA) framework, MUST run a preliminary non-compensatory check on property tenure and financial layout constraints. If an absolute structural friction point is matched (e.g., Leasehold tenure paired with a high-holding-cost Council Tax Band G or H), the system MUST trigger an immediate circuit breaker, bypassing standard additive calculations to hardcode the risk score to a maximum value of 1.00 (RED classification status).
 
 FR7: User-Driven Compensatory Weight Tuning (Stage 2 Risk)
-  If an asset successfully clears the Stage 1 boundary gate, the system MUST compute a Weighted Linear Combination (WLC) score across continuous operational vectors. The backend MUST accept explicit URL argument weight parameters passed by frontend dashboard sliders (`legal_w`, `env_w`, `econ_w`), enabling B2B stakeholders to interactively adjust coefficients and trigger dynamic real-time score updates.
+  If an asset successfully clears the Stage 1 boundary gate, the system MUST compute a Weighted Linear Combination (WLC) score across continuous operational vectors. The backend MUST accept explicit URL argument weight parameters passed by frontend dashboard sliders (`legal_w`, `env_w`, `econ_w`), enabling stakeholders to interactively adjust coefficients and trigger dynamic real-time score updates.
 
 2)  Non-Functional Requirements 
 
@@ -41,7 +41,7 @@ NFR3: Asynchronous Interface Updates
   The web interface must update the map, display property shapes, and change sidebar values without forcing the user to reload the entire web page. The app must use background requests (AJAX/Fetch) to send and receive data smoothly, keeping the user experience fast and uninterrupted.
 
 NFR4: Map Display Limits
-  To prevent the user's web browser from lagging or crashing, the map must never try to draw too many property shapes at the same time. The backend database must strictly limit its output to a maximum of 150 property boundary shapes per screen view (`.limit(150)`) to protect the browser's graphics engine (WebGL) from running out of memory.
+  To prevent the user's web browser from lagging or crashing, the map must never try to draw too many property shapes at the same time. The backend database must strictly limit its output to a maximum of 150 property boundary shapes per screen view (`.limit(150)`) to protect the client-side WebGL engine (Mapbox GL JS) from running out of memory.
 
 NFR5: Database Protection and Data Safety
   To keep the core database safe and uncorrupted, all original public datasets (like CSVs and boundary files) must remain completely locked and unedited. Any temporary user actions—such as adjusting the risk-weight sliders or adding custom map drawings—must be kept entirely in the user's local web browser session, ensuring the main production tables are never modified or damaged.
