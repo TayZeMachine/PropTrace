@@ -129,3 +129,21 @@ Coordinate System Projections (SRID 4326 ⇄ 27700): The route captures four coo
 Memory Safeguard Constraint: To prevent server thread resource exhaustion or browser rendering lag when zoomed out to macro scales, I engineered a short-circuit performance gate. If the screen envelope area bounds exceed 5 square kilometers, the query halts execution immediately and issues a warning payload.
 
 Relational Spatial Joins & GeoJSON Serialization: For safe scales, the engine executes a multi-schema join matching the database geometry schema layer to the core text table attributes via the UPRN anchor (BirminghamProperty.uprn == BirminghamGeometry.inspireid). It queries the table using an ST_Intersects condition filter and wraps the returned spatial boundaries inside an inline ST_AsGeoJSON compiler, outputting an industry-standard, fully serialized GeoJSON FeatureCollection capped at .limit(150) for rendering stability.
+
+Log Entry: 14/07/2026 — Algorithmic Core Execution, Type-Safety Debugging & Multi-Source Validation
+
+Today, I transitioned the backend from a purely passive spatial query layer into an active Multi-Criteria Decision Analysis (MCDA) framework by deploying the core scoring rules for the Composite Property Suitability Index (CPSI).
+
+1. Two-Stage Computational Scoring Pipeline
+Grounded in Jacek Malczewski's (2006) warnings regarding standard Weighted Linear Combination (WLC) compensatory flaws—where excellent attributes dangerously obscure catastrophic risks—I engineered a strict, two-stage computation helper function (`calculate_cpsi_score`):
+- Stage 1 (Non-Compensatory Gate): Implements a strict structural circuit breaker. If an asset matches severe risk conditions (e.g., long leaseholds paired with luxury high-holding-cost Council Tax Bands G or H), the system short-circuits, completely bypasses the additive algebra, and locks the risk score at a ceiling of 1.00 (Red status).
+- Stage 2 (Compensatory WLC Matrix): If an asset clears the binary gate, it enters a standard additive model base. The engine parses categorical attributes (EPC alphanumeric bands, building eras) and normalizes them into continuous risk sub-scores across Legal (40%), Environmental (30%), and Economic (30%) layers before computing the final composite floating-point risk index.
+
+2. Debugging Scope Parameters & Parameter Alignment
+During the initialization of Route 1 (`/api/properties/<postcode>`), I encountered and resolved a significant scoping type-error during active compilation. An initial routing layout accidentally duplicated the `env_w` variable string and mapped the raw, un-hashed database configuration string (`db_password`) directly into the mathematical calculation function array where the economic weight float variable (`econ_w`) belonged. This would have triggered an unhandled type-safety breakdown upon runtime execution during multiplication tasks. I refactored the parameter grid, successfully mapping `econ_w` to its individual client request target and ensuring type-safe floating-point inputs.
+
+3. Relational Verification of One-to-Many Postcode Spatial Densities
+Upon execution testing of Route 1 against local test postcodes (e.g., B11 1AA), the API successfully returned multiple records within a single JSON collection payload. While a baseline visual inspection could mistake this for query duplication, a deep relational schema trace verified that the database engine handles a strict, accurate one-to-many relationship (One Postcode cluster -> Multiple UPRN asset nodes). The master table cleanly isolates independent properties via unique BigInt Ordnance Survey UPRNs. The identical residual CPSI scores (0.21, Green tier) reflect matching physical staging matrices (EPC D, Tax Band A, Freehold tenure) logged across those distinct structural assets.
+
+4. Repository Deployment Velocity
+To maintain compliance with the department's active version-history framework, I initialized a comprehensive git pipeline tracking checkpoint updates for 'app.py' and 'REQUIREMENTS.md'.
