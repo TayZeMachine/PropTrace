@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LegacyTrace UK — Spatial Decision Support System</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.1.0/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.1.0/mapbox-gl.css" rel="stylesheet" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { font-family: 'IBM Plex Sans', sans-serif; }
+  .font-data { font-family: 'IBM Plex Mono', monospace; }
+  body { overflow: hidden; }
+  .sidebar-scroll { overflow-y: auto; }
+  .sidebar-scroll::-webkit-scrollbar { width: 6px; }
+  .sidebar-scroll::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #4C8DFF; cursor: pointer; border: 2px solid #0B0F14; }
+  .dock-btn { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #64748b; transition: all .15s; }
+  .dock-btn:hover { background: #1e293b; color: #cbd5e1; }
+  .dock-btn.active-dock { background: #4C8DFF22; color: #4C8DFF; border: 1px solid #4C8DFF55; }
+  .sidebar-tab { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 8px 4px; color: #64748b; border-bottom: 2px solid transparent; cursor: pointer; }
+  .sidebar-tab.tab-active { color: #4C8DFF; border-bottom-color: #4C8DFF; }
+  .tier-panel { background: rgba(2,6,15,0.5); border: 1px solid #1e293b; border-radius: 12px; padding: 12px; }
+  .tier-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: #64748b; margin-bottom: 6px; }
+  #sidebar { transition: width .18s ease; }
+  .lineage-badge { background: #020617; border: 1px solid #1e293b; color: #94a3b8; padding: 6px; border-radius: 6px; display: flex; align-items: center; gap: 5px; font-size: 10px; }
+  .lineage-badge:hover { border-color: #4C8DFF; color: #cbd5e1; }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-100 h-screen flex flex-col">
+
+  <!-- TOP BAR -->
+  <header class="bg-slate-900 border-b border-slate-800 px-4 py-2.5 flex items-center justify-between z-30 shadow-md shrink-0">
+    <div class="flex items-center space-x-3">
+      <div class="bg-blue-600 p-2 rounded-xl shadow-lg"><i class="fa-solid fa-map-location-dot text-white"></i></div>
+      <div>
+        <h1 class="text-sm font-bold text-slate-100">LegacyTrace UK</h1>
+        <p class="text-[10px] text-slate-400 tracking-wider uppercase">Spatial Decision Support System</p>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button id="btn-filter-retrofit" class="text-[10px] font-bold uppercase tracking-wider bg-emerald-900/40 border border-emerald-700/50 text-emerald-400 px-3 py-1.5 rounded-lg hover:bg-emerald-800/60 transition-all">
+        <i class="fa-solid fa-leaf"></i> Retrofit Plays
+      </button>
+      <button id="btn-filter-hmo" class="text-[10px] font-bold uppercase tracking-wider bg-purple-900/40 border border-purple-700/50 text-purple-400 px-3 py-1.5 rounded-lg hover:bg-purple-800/60 transition-all">
+        <i class="fa-solid fa-house-chimney"></i> HMO Potential
+      </button>
+      <button id="btn-filter-clear" class="text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-400 px-3 py-1.5 rounded-lg hover:bg-slate-700 transition-all hidden">
+        Clear Filters
+      </button>
+    </div>
+
+    <div class="flex items-center space-x-2 w-80">
+      <input type="text" id="postcode-input" placeholder="e.g. B31 1TX" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-200 uppercase focus:border-blue-500 outline-none">
+      <button id="btn-search" class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2 rounded-xl"><i class="fa-solid fa-bolt"></i></button>
+    </div>
+  </header>
+
+  <div class="flex flex-1 relative overflow-hidden">
+
+    <!-- LEFT DOCK -->
+    <nav class="w-16 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-4 gap-2 z-30 shrink-0">
+      <button data-mode="map" class="dock-btn active-dock" title="Map View"><i class="fa-solid fa-map"></i></button>
+      <button data-mode="params" class="dock-btn" title="Risk Parameters"><i class="fa-solid fa-sliders"></i></button>
+      <button data-mode="table" class="dock-btn" title="Data Tables"><i class="fa-solid fa-table-cells"></i></button>
+    </nav>
+
+    <!-- CENTRAL CANVAS -->
+    <div class="flex-1 relative overflow-hidden">
+      <main id="map" class="absolute inset-0 bg-slate-900"></main>
+
+      <!-- RISK PARAMETERS PANEL -->
+      <div id="panel-params" class="hidden absolute left-4 top-4 w-72 bg-slate-900/95 backdrop-blur-md border border-slate-800/80 rounded-2xl p-4 shadow-2xl z-20">
+        <h2 class="text-[10px] font-bold text-slate-400 uppercase mb-1"><i class="fa-solid fa-sliders text-blue-400"></i> Stage 2 — WLC Weighting</h2>
+        <p class="text-[9px] text-slate-500 mb-3">Adjusts compensatory scoring only. The Stage 1 legal gate cannot be tuned out.</p>
+        <div class="space-y-3">
+          <div>
+            <div class="flex justify-between text-[10px] mb-1"><span class="text-slate-400">Legal</span><span id="lbl-legal" class="text-blue-400 font-bold font-data">40%</span></div>
+            <input type="range" id="weight-legal" min="0" max="1" step="0.05" value="0.4" class="w-full accent-blue-500 h-1 bg-slate-950 rounded-lg">
+          </div>
+          <div>
+            <div class="flex justify-between text-[10px] mb-1"><span class="text-slate-400">Environmental</span><span id="lbl-env" class="text-emerald-400 font-bold font-data">30%</span></div>
+            <input type="range" id="weight-env" min="0" max="1" step="0.05" value="0.3" class="w-full accent-emerald-500 h-1 bg-slate-950 rounded-lg">
+          </div>
+          <div>
+            <div class="flex justify-between text-[10px] mb-1"><span class="text-slate-400">Economic</span><span id="lbl-econ" class="text-amber-400 font-bold font-data">30%</span></div>
+            <input type="range" id="weight-econ" min="0" max="1" step="0.05" value="0.3" class="w-full accent-amber-500 h-1 bg-slate-950 rounded-lg">
+          </div>
+        </div>
+      </div>
+
+      <!-- DATA TABLE PANEL -->
+      <div id="panel-table" class="hidden absolute inset-4 bg-slate-900/97 backdrop-blur-md border border-slate-800 rounded-2xl shadow-2xl z-20 flex flex-col">
+        <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+          <h2 class="text-xs font-bold uppercase text-slate-300"><i class="fa-solid fa-table-cells text-blue-400"></i> Parcels in Current View</h2>
+          <span id="data-table-count" class="text-[10px] text-slate-500 font-data">0 parcels</span>
+        </div>
+        <div class="flex-1 overflow-auto">
+          <table class="w-full text-left">
+            <thead class="sticky top-0 bg-slate-900 text-[9px] uppercase text-slate-500 tracking-wider">
+              <tr><th class="px-3 py-2">UPRN</th><th class="px-3 py-2">Inspire ID</th><th class="px-3 py-2">RAG Status</th></tr>
+            </thead>
+            <tbody id="data-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ZOOM WARNING TOAST -->
+      <div id="zoom-toast" class="hidden absolute top-4 left-1/2 -translate-x-1/2 bg-amber-950/95 border border-amber-700 text-amber-300 text-xs font-semibold px-4 py-2 rounded-lg shadow-xl z-30">
+        <i class="fa-solid fa-magnifying-glass-plus"></i> Please zoom in to view parcel data.
+      </div>
+
+      <!-- GENERAL STATUS TOAST (search results, network errors) -->
+      <div id="status-toast" class="hidden absolute top-4 left-1/2 -translate-x-1/2 bg-slate-800/95 border border-slate-600 text-slate-200 text-xs font-semibold px-4 py-2 rounded-lg shadow-xl z-30"></div>
+
+      <!-- COORDINATE READOUT -->
+      <div id="coord-readout" class="absolute bottom-3 left-3 text-[10px] font-data text-slate-500 bg-slate-950/70 border border-slate-800/60 px-2 py-1 rounded z-20">--.------°, --.------° · z--.-</div>
+    </div>
+
+    <!-- RIGHT SIDEBAR -->
+    <aside id="sidebar" class="relative bg-slate-900 border-l border-slate-800 flex flex-col z-10 shadow-2xl shrink-0" style="width:24rem;">
+      <button id="btn-collapse" class="absolute -left-3 top-6 bg-slate-800 border border-slate-700 rounded-full w-6 h-6 flex items-center justify-center text-[10px] text-slate-400 hover:text-white z-20">
+        <i class="fa-solid fa-chevron-right" id="collapse-icon"></i>
+      </button>
+
+      <div id="sidebar-inner" class="flex flex-col flex-1 min-w-0 overflow-hidden">
+        <div class="p-5 border-b border-slate-800 shrink-0">
+          <div class="flex justify-between items-start">
+            <div>
+              <h2 class="text-xs font-bold uppercase text-slate-400">CPSI Telemetry</h2>
+              <p id="active-uprn" class="text-[10px] font-data text-slate-500 mt-0.5">No Asset Selected</p>
+            </div>
+            <div id="cpsi-badge" class="text-xs font-bold text-slate-500 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 shadow-inner font-data">N/A</div>
+          </div>
+          <button id="btn-site-assembly" class="mt-4 w-full bg-indigo-600/20 text-indigo-400 border border-indigo-600/50 hover:bg-indigo-600 hover:text-white rounded-lg py-2 text-[10px] font-bold uppercase tracking-wider transition-all hidden">
+            <i class="fa-solid fa-object-group"></i> Scan for Site Assembly
+          </button>
+        </div>
+
+        <!-- TABS -->
+        <div class="flex border-b border-slate-800 shrink-0">
+          <div class="sidebar-tab tab-active flex-1 text-center" data-tab="profile">Property Profile</div>
+          <div class="sidebar-tab flex-1 text-center" data-tab="executive">Executive Risk Assessment</div>
+        </div>
+
+        <div class="flex-1 sidebar-scroll min-h-0">
+
+          <!-- PROPERTY PROFILE TAB -->
+          <div id="tab-profile" class="p-5 space-y-3">
+            <div id="welcome-panel" class="text-center py-10 border border-dashed border-slate-800 rounded-2xl">
+              <i class="fa-solid fa-hand-pointer text-slate-600 text-2xl mb-2"></i>
+              <p class="text-[11px] text-slate-400">Click a parcel or search a postcode.</p>
+            </div>
+
+            <div id="data-content" class="hidden space-y-3">
+
+              <div class="tier-panel">
+                <p class="tier-label">Tier 1 — Structural &amp; Energy Performance</p>
+                <div class="grid grid-cols-2 gap-2 text-xs">
+                  <div><span class="block text-[9px] text-slate-500 uppercase">Building Era</span><span id="t1-era" class="font-data text-slate-200">—</span></div>
+                  <div><span class="block text-[9px] text-slate-500 uppercase">EPC / Potential</span><span id="t1-epc" class="font-data text-slate-200">—</span></div>
+                </div>
+                <p id="t1-notes" class="text-[10px] text-slate-400 mt-2"></p>
+              </div>
+
+              <div class="tier-panel opacity-70">
+                <div class="flex items-center justify-between mb-1">
+                  <p class="tier-label mb-0">Tier 2 — Spatial &amp; Environmental Hazards</p>
+                  <span id="t2-badge" class="text-[8px] font-bold uppercase tracking-wider bg-amber-950/40 text-amber-500 border border-amber-800/50 px-1.5 py-0.5 rounded shrink-0 ml-2">Pending</span>
+                </div>
+                <p id="t2-notes" class="text-[10px] text-slate-500 italic">—</p>
+              </div>
+
+              <div class="tier-panel">
+                <p class="tier-label">Tier 3 — Legal &amp; Tenure Restrictions</p>
+                <div class="grid grid-cols-2 gap-2 text-xs">
+                  <div><span class="block text-[9px] text-slate-500 uppercase">Tenure</span><span id="t3-tenure" class="font-data text-slate-200">—</span></div>
+                  <div><span class="block text-[9px] text-slate-500 uppercase">Inspire ID</span><span id="t3-inspireid" class="font-data text-slate-200">—</span></div>
+                </div>
+                <p id="t3-notes" class="text-[10px] text-slate-400 mt-2"></p>
+              </div>
+
+              <div class="pt-2">
+                <p class="tier-label">Registry Lineage Verification</p>
+                <div class="grid grid-cols-2 gap-2">
+                  <a href="https://search-property-information.service.gov.uk/" target="_blank" class="lineage-badge"><i class="fa-solid fa-arrow-up-right-from-square text-[8px]"></i> HM Land Registry</a>
+                  <a href="https://www.gov.uk/find-energy-certificate" target="_blank" class="lineage-badge"><i class="fa-solid fa-arrow-up-right-from-square text-[8px]"></i> EPC Register</a>
+                  <a href="https://www.ordnancesurvey.co.uk/products/os-mastermap-highways-network" target="_blank" class="lineage-badge"><i class="fa-solid fa-arrow-up-right-from-square text-[8px]"></i> OS MasterMap</a>
+                  <a href="https://www.gov.uk/government/organisations/environment-agency" target="_blank" class="lineage-badge"><i class="fa-solid fa-arrow-up-right-from-square text-[8px]"></i> EA Flood Data</a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- EXECUTIVE RISK ASSESSMENT TAB -->
+          <div id="tab-executive" class="hidden p-5 space-y-3">
+            <p class="text-[10px] text-slate-500">Computed live from properties inside the current map view — not a fixed summary.</p>
+
+            <div id="exec-loading" class="hidden text-center py-8 text-[11px] text-slate-500"><i class="fa-solid fa-circle-notch fa-spin"></i> Analyzing current view…</div>
+            <div id="exec-empty" class="hidden text-center py-8 text-[11px] text-slate-500 border border-dashed border-slate-800 rounded-2xl"></div>
+
+            <div id="exec-content" class="hidden space-y-3">
+              <div class="tier-panel">
+                <p class="tier-label">In View</p>
+                <p class="text-lg font-bold font-data text-slate-100"><span id="exec-count">0</span> properties</p>
+              </div>
+
+              <div class="tier-panel">
+                <p class="tier-label">Q1 — Predictive Driver</p>
+                <p id="exec-q1" class="text-[11px] text-slate-300"></p>
+              </div>
+
+              <div class="tier-panel">
+                <p class="tier-label">Q2 — Retrofit CapEx Estimate</p>
+                <p class="text-lg font-bold font-data text-amber-400"><span id="exec-q2-cost">£0</span></p>
+                <p id="exec-q2-note" class="text-[10px] text-slate-500 mt-1"></p>
+              </div>
+
+              <div class="tier-panel">
+                <p class="tier-label">Q3 — Tenure Compliance Comparison</p>
+                <div class="space-y-2 mt-1">
+                  <div>
+                    <div class="flex justify-between text-[10px] text-slate-400 mb-1"><span>Leasehold avg. CPSI</span><span id="exec-q3-lh-val" class="font-data">—</span></div>
+                    <div class="w-full bg-slate-950 rounded-full h-2 border border-slate-800"><div id="exec-q3-lh-bar" class="bg-blue-500 h-2 rounded-full" style="width:0%"></div></div>
+                  </div>
+                  <div>
+                    <div class="flex justify-between text-[10px] text-slate-400 mb-1"><span>Freehold avg. CPSI</span><span id="exec-q3-fh-val" class="font-data">—</span></div>
+                    <div class="w-full bg-slate-950 rounded-full h-2 border border-slate-800"><div id="exec-q3-fh-bar" class="bg-emerald-500 h-2 rounded-full" style="width:0%"></div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="p-4 border-t border-slate-800 bg-slate-950/40 shrink-0">
+          <button id="btn-print" disabled class="w-full bg-slate-100 text-slate-900 rounded-xl py-2.5 px-4 text-xs font-bold transition-all shadow-lg hover:bg-white disabled:opacity-50">
+            <i class="fa-solid fa-file-shield"></i> Generate In-Depth Audit Report
+          </button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    // REPLACE THIS WITH YOUR TOKEN!
+    mapboxgl.accessToken = 'pk.eyJ1IjoidGF5YWIxMjMiLCJhIjoiY21yNjk1YWhpMGRtczJ5cjBkbDdkeHh4YyJ9.wqtBmgsI2K_hu0I-eF0RwA';
+
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/dark-v11',
+      center: [-1.8904, 52.4862], zoom: 13
+    });
+
+    let activeProperty = null;
+    let currentFilter = null;
+    let lastParcelFeatures = [];
+
+    function showStatus(msg, isError = false) {
+      const el = document.getElementById('status-toast');
+      el.innerText = msg;
+      el.className = `absolute top-4 left-1/2 -translate-x-1/2 text-xs font-semibold px-4 py-2 rounded-lg shadow-xl z-30 border ${isError ? 'bg-red-950/95 border-red-700 text-red-300' : 'bg-slate-800/95 border-slate-600 text-slate-200'}`;
+      clearTimeout(window.__statusTimer);
+      window.__statusTimer = setTimeout(() => el.classList.add('hidden'), 4000);
+    }
+
+    // ---------- WEIGHTS ----------
+    function currentWeights() {
+      const legal = parseFloat(document.getElementById('weight-legal').value);
+      const env = parseFloat(document.getElementById('weight-env').value);
+      const econ = parseFloat(document.getElementById('weight-econ').value);
+      const total = (legal + env + econ) || 1;
+      return { legal, env, econ, legalPct: Math.round(100 * legal / total), envPct: Math.round(100 * env / total), econPct: Math.round(100 * econ / total) };
+    }
+    function weightQueryString() {
+      const w = currentWeights();
+      return `legal_weight=${w.legal}&env_weight=${w.env}&econ_weight=${w.econ}`;
+    }
+    function updateWeightLabels() {
+      const w = currentWeights();
+      document.getElementById('lbl-legal').innerText = w.legalPct + '%';
+      document.getElementById('lbl-env').innerText = w.envPct + '%';
+      document.getElementById('lbl-econ').innerText = w.econPct + '%';
+    }
+    ['weight-legal', 'weight-env', 'weight-econ'].forEach(id => {
+      document.getElementById(id).addEventListener('input', () => {
+        updateWeightLabels();
+        fetchParcels();
+        if (activeProperty) fetchReport(activeProperty.uprn);
+      });
+    });
+
+    // ---------- MAP SOURCES/LAYERS ----------
+    map.on('load', () => {
+      map.addSource('parcels', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addSource('assembly', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+
+      map.addLayer({
+        id: 'parcels-fill', type: 'fill', source: 'parcels',
+        paint: {
+          'fill-color': ['case', ['==', ['get', 'rag_status'], 'RED'], '#ef4444', ['==', ['get', 'rag_status'], 'AMBER'], '#f59e0b', '#10b981'],
+          'fill-opacity': 0.4
+        }
+      });
+      map.addLayer({ id: 'parcels-line', type: 'line', source: 'parcels', paint: { 'line-color': '#ffffff', 'line-width': 1, 'line-opacity': 0.3 } });
+      map.addLayer({ id: 'assembly-line', type: 'line', source: 'assembly', paint: { 'line-color': '#6366f1', 'line-width': 4, 'line-opacity': 0.8 } });
+
+      fetchParcels();
+    });
+
+    map.on('moveend', () => {
+      fetchParcels();
+      if (!document.getElementById('tab-executive').classList.contains('hidden')) fetchBboxStats();
+    });
+
+    map.on('mousemove', (e) => {
+      document.getElementById('coord-readout').innerText = `${e.lngLat.lat.toFixed(6)}°, ${e.lngLat.lng.toFixed(6)}° · z${map.getZoom().toFixed(1)}`;
+    });
+
+    // ---------- PARCELS (5km-gate aware) ----------
+    function fetchParcels() {
+      const b = map.getBounds();
+      let url = `http://127.0.0.1:5000/api/spatial/parcels?bounds=${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}&${weightQueryString()}`;
+      if (currentFilter) url += `&filter=${currentFilter}`;
+
+      fetch(url)
+        .then(r => r.json())
+        .then(d => {
+          if (d.features) {
+            map.getSource('parcels').setData(d);
+            lastParcelFeatures = d.features;
+            renderDataTable();
+            document.getElementById('zoom-toast').classList.add('hidden');
+            if (d.debug) console.debug('[parcels coverage]', d.debug);
+          } else if (d.message) {
+            document.getElementById('zoom-toast').innerHTML = `<i class="fa-solid fa-magnifying-glass-plus"></i> ${d.message}`;
+            document.getElementById('zoom-toast').classList.remove('hidden');
+          }
+        })
+        .catch(err => {
+          console.error('Parcel fetch failed:', err);
+          showStatus('Could not load parcels — is the backend running?', true);
+        });
+    }
+
+    // ---------- ARBITRAGE FILTERS ----------
+    document.getElementById('btn-filter-retrofit').addEventListener('click', () => { currentFilter = 'retrofit'; fetchParcels(); document.getElementById('btn-filter-clear').classList.remove('hidden'); });
+    document.getElementById('btn-filter-hmo').addEventListener('click', () => { currentFilter = 'hmo'; fetchParcels(); document.getElementById('btn-filter-clear').classList.remove('hidden'); });
+    document.getElementById('btn-filter-clear').addEventListener('click', (e) => { currentFilter = null; fetchParcels(); e.target.classList.add('hidden'); });
+
+    // ---------- POSTCODE SEARCH ----------
+    document.getElementById('btn-search').addEventListener('click', () => {
+      const pc = document.getElementById('postcode-input').value;
+      if (!pc.trim()) return showStatus('Enter a postcode first.', true);
+
+      fetch(`http://127.0.0.1:5000/api/properties/${encodeURIComponent(pc)}?${weightQueryString()}`)
+        .then(r => r.json().then(d => ({ ok: r.ok, d })))
+        .then(({ ok, d }) => {
+          if (!ok || d.status === "error") {
+            showStatus(d.message || "No exact match found in database slice.", true);
+            return;
+          }
+
+          const withGeom = d.properties.filter(p => p.geometry_geojson);
+          const withoutGeom = d.properties.filter(p => !p.geometry_geojson);
+
+          if (withGeom.length > 0) {
+            const features = withGeom.map(p => ({ type: "Feature", geometry: JSON.parse(p.geometry_geojson), properties: p }));
+            map.getSource('parcels').setData({ type: "FeatureCollection", features });
+            lastParcelFeatures = features;
+            renderDataTable();
+            const c = features[0].geometry.coordinates[0][0];
+            map.fitBounds(c.reduce((b, coord) => b.extend(coord), new mapboxgl.LngLatBounds(c[0], c[0])), { padding: 50 });
+          } else {
+            showStatus(`Found ${d.properties.length} propert${d.properties.length === 1 ? 'y' : 'ies'} but no mapped parcel geometry yet — showing profile only.`);
+          }
+
+          // Show the first match in the sidebar regardless of whether it has geometry
+          selectProperty(d.properties[0].uprn);
+        })
+        .catch(err => {
+          console.error('Postcode search failed:', err);
+          showStatus('Search failed — is the backend running on port 5000?', true);
+        });
+    });
+
+    // ---------- SELECT PROPERTY (map click or table row) ----------
+    map.on('click', 'parcels-fill', (e) => selectProperty(e.features[0].properties.uprn));
+
+    function selectProperty(uprn) {
+      switchDock('map');
+      document.getElementById('active-uprn').innerText = `UPRN: ${uprn}`;
+      fetchReport(uprn);
+    }
+
+    function fetchReport(uprn) {
+      fetch(`http://127.0.0.1:5000/api/property/report/${uprn}?${weightQueryString()}`)
+        .then(r => {
+          if (!r.ok) throw new Error(`Server responded ${r.status}`);
+          return r.json();
+        })
+        .then(d => {
+          activeProperty = d.report;
+          document.getElementById('welcome-panel').classList.add('hidden');
+          document.getElementById('data-content').classList.remove('hidden');
+          document.getElementById('btn-print').disabled = false;
+
+          const btnAssembly = document.getElementById('btn-site-assembly');
+          if (activeProperty.inspireid) {
+            btnAssembly.classList.remove('hidden');
+            btnAssembly.onclick = () => triggerSiteAssembly(activeProperty.inspireid);
+          } else {
+            btnAssembly.classList.add('hidden');
+          }
+
+          updateUI(activeProperty);
+        })
+        .catch(err => {
+          console.error('Report fetch failed:', err);
+          showStatus('Could not load property report — is the backend running?', true);
+        });
+    }
+
+    function triggerSiteAssembly(inspireid) {
+      fetch(`http://127.0.0.1:5000/api/site-assembly/${inspireid}`)
+        .then(r => r.json())
+        .then(d => {
+          if (d.features) {
+            map.getSource('assembly').setData({ type: "FeatureCollection", features: d.features });
+            showStatus(`Site Assembly: identified ${d.features.length} contiguous adjoining parcels.`);
+          } else {
+            showStatus(d.message || 'Site assembly scan failed.', true);
+          }
+        })
+        .catch(err => {
+          console.error('Site assembly failed:', err);
+          showStatus('Site assembly scan failed — is the backend running?', true);
+        });
+    }
+
+    function updateUI(p) {
+      const badge = document.getElementById('cpsi-badge');
+      badge.innerText = parseFloat(p?.cpsi_score ?? 0).toFixed(2);
+      badge.className = `text-xs font-bold rounded-xl px-3 py-1.5 shadow-inner font-data ${p?.rag_status === "GREEN" ? "text-emerald-400 bg-emerald-950/30 border border-emerald-900/50" : p?.rag_status === "AMBER" ? "text-amber-400 bg-amber-950/30 border border-amber-900/50" : "text-red-500 bg-red-950/40 border border-red-900/50"}`;
+
+      const t1 = p?.tiers?.tier_1_structural;
+      document.getElementById('t1-era').innerText = t1?.building_era || 'Not sourced';
+      document.getElementById('t1-epc').innerText = `${t1?.epc_rating || '—'} → ${t1?.potential_epc_rating || '—'}`;
+      document.getElementById('t1-notes').innerText = t1?.notes || '';
+
+      const t2 = p?.tiers?.tier_2_environmental;
+      document.getElementById('t2-notes').innerText = t2?.notes || 'Not yet available.';
+      document.getElementById('t2-badge').innerText = t2?.status_label || 'Pending';
+
+      const t3 = p?.tiers?.tier_3_legal;
+      document.getElementById('t3-tenure').innerText = t3?.tenure || 'Not sourced';
+      document.getElementById('t3-inspireid').innerText = p?.inspireid ?? 'Unmatched';
+      document.getElementById('t3-notes').innerText = t3?.notes || '';
+    }
+
+    // ---------- DOCK ----------
+    function switchDock(mode) {
+      document.querySelectorAll('.dock-btn').forEach(b => b.classList.toggle('active-dock', b.dataset.mode === mode));
+      document.getElementById('panel-params').classList.toggle('hidden', mode !== 'params');
+      document.getElementById('panel-table').classList.toggle('hidden', mode !== 'table');
+      if (mode === 'table') renderDataTable();
+    }
+    document.querySelectorAll('.dock-btn').forEach(btn => btn.addEventListener('click', () => switchDock(btn.dataset.mode)));
+
+    // ---------- DATA TABLE ----------
+    function ragClass(status) {
+      return status === 'RED' ? 'bg-red-950/50 text-red-400' : status === 'AMBER' ? 'bg-amber-950/50 text-amber-400' : 'bg-emerald-950/50 text-emerald-400';
+    }
+    function renderDataTable() {
+      const tbody = document.getElementById('data-table-body');
+      tbody.innerHTML = '';
+      lastParcelFeatures.forEach(f => {
+        const p = f.properties;
+        const tr = document.createElement('tr');
+        tr.className = 'border-b border-slate-800/60 hover:bg-slate-800/40 cursor-pointer text-xs';
+        tr.innerHTML = `<td class="px-3 py-2 font-data">${p.uprn}</td><td class="px-3 py-2 font-data text-slate-500">${p.inspireid ?? '—'}</td><td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-[10px] font-bold ${ragClass(p.rag_status)}">${p.rag_status}</span></td>`;
+        tr.addEventListener('click', () => selectProperty(p.uprn));
+        tbody.appendChild(tr);
+      });
+      document.getElementById('data-table-count').innerText = `${lastParcelFeatures.length} parcels in current view`;
+    }
+
+    // ---------- SIDEBAR TABS ----------
+    document.querySelectorAll('.sidebar-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('tab-active'));
+        tab.classList.add('tab-active');
+        const target = tab.dataset.tab;
+        document.getElementById('tab-profile').classList.toggle('hidden', target !== 'profile');
+        document.getElementById('tab-executive').classList.toggle('hidden', target !== 'executive');
+        if (target === 'executive') fetchBboxStats();
+      });
+    });
+
+    // ---------- EXECUTIVE RISK ASSESSMENT (real bbox aggregation) ----------
+    function fetchBboxStats() {
+      const b = map.getBounds();
+      const url = `http://127.0.0.1:5000/api/spatial/stats?bounds=${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}&${weightQueryString()}`;
+      document.getElementById('exec-content').classList.add('hidden');
+      document.getElementById('exec-empty').classList.add('hidden');
+      document.getElementById('exec-loading').classList.remove('hidden');
+
+      fetch(url).then(r => r.json()).then(d => {
+        document.getElementById('exec-loading').classList.add('hidden');
+        if (d.status !== 'success' || !d.stats) {
+          document.getElementById('exec-empty').innerText = d.message || 'No properties in current view.';
+          document.getElementById('exec-empty').classList.remove('hidden');
+          return;
+        }
+        renderExecutiveCards(d.stats);
+        document.getElementById('exec-content').classList.remove('hidden');
+      });
+    }
+
+    function renderExecutiveCards(s) {
+      document.getElementById('exec-count').innerText = s.properties_in_view;
+      document.getElementById('exec-q1').innerText = s.predictive_driver.narrative;
+      document.getElementById('exec-q2-cost').innerText = '£' + s.retrofit_capex_estimate.estimated_total_gbp.toLocaleString();
+      document.getElementById('exec-q2-note').innerText = `${s.retrofit_capex_estimate.low_epc_property_count} E/F/G-rated properties × £${s.retrofit_capex_estimate.cost_per_property_assumption_gbp.toLocaleString()} assumption per property.`;
+
+      const lh = s.tenure_compliance_comparison.leasehold_avg_cpsi;
+      const fh = s.tenure_compliance_comparison.freehold_avg_cpsi;
+      document.getElementById('exec-q3-lh-bar').style.width = lh !== null ? `${Math.round(lh * 100)}%` : '0%';
+      document.getElementById('exec-q3-fh-bar').style.width = fh !== null ? `${Math.round(fh * 100)}%` : '0%';
+      document.getElementById('exec-q3-lh-val').innerText = lh !== null ? `${lh.toFixed(2)} (n=${s.tenure_compliance_comparison.leasehold_count})` : 'No data';
+      document.getElementById('exec-q3-fh-val').innerText = fh !== null ? `${fh.toFixed(2)} (n=${s.tenure_compliance_comparison.freehold_count})` : 'No data';
+    }
+
+    // ---------- SIDEBAR COLLAPSE ----------
+    let sidebarCollapsed = false;
+    document.getElementById('btn-collapse').addEventListener('click', () => {
+      sidebarCollapsed = !sidebarCollapsed;
+      document.getElementById('sidebar').style.width = sidebarCollapsed ? '0px' : '24rem';
+      document.getElementById('sidebar-inner').classList.toggle('hidden', sidebarCollapsed);
+      document.getElementById('collapse-icon').className = sidebarCollapsed ? 'fa-solid fa-chevron-left' : 'fa-solid fa-chevron-right';
+    });
+
+    // ---------- AUDIT REPORT ----------
+    document.getElementById('btn-print').addEventListener('click', () => {
+      const p = activeProperty;
+      if (!p) { showStatus('Select a property first.', true); return; }
+
+      const pw = window.open('', '_blank', 'width=850,height=1000');
+      if (!pw) { showStatus('Popup blocked — allow popups for this site to generate the report.', true); return; }
+
+      const t1 = p?.tiers?.tier_1_structural;
+      const t2 = p?.tiers?.tier_2_environmental;
+      const t3 = p?.tiers?.tier_3_legal;
+      const ragColor = p?.rag_status === 'RED' ? '#dc2626' : p?.rag_status === 'AMBER' ? '#d97706' : '#059669';
+
+      const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>LegacyTrace Audit — ${p?.uprn ?? '—'}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; color: #0f172a; padding: 48px; max-width: 800px; margin: 0 auto; }
+  .header { border-bottom: 4px solid #0f172a; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .title { font-size: 22px; font-weight: 900; margin: 0; }
+  .meta { font-size: 11px; color: #64748b; font-family: monospace; margin-top: 4px; }
+  .score { font-size: 36px; font-weight: 900; text-align: right; margin: 0; color: ${ragColor}; }
+  .score-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #64748b; text-align: right; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; margin: 24px 0 4px; display: flex; align-items: center; gap: 8px; }
+  .badge { font-size: 9px; background: #78350f33; color: #b45309; padding: 2px 7px; border-radius: 4px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
+  p.body-text { font-size: 14px; margin: 4px 0; }
+  p.note { font-size: 11px; color: #64748b; margin: 4px 0; }
+  .lineage { font-size: 11px; font-family: monospace; color: #64748b; }
+  .sign { margin-top: 64px; padding-top: 16px; border-top: 1px solid #cbd5e1; display: flex; justify-content: space-between; font-size: 11px; color: #64748b; }
+  .print-btn { margin-top: 40px; background: #0f172a; color: white; padding: 10px 20px; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; }
+  @media print { .print-btn { display: none; } }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <p class="title">LegacyTrace UK — In-Depth Audit Report</p>
+      <p class="meta">UPRN ${p?.uprn ?? '—'} · Postcode ${p?.postcode ?? '—'} · Generated ${new Date().toLocaleString('en-GB')}</p>
+    </div>
+    <div>
+      <p class="score">${p?.cpsi_score ?? '—'}</p>
+      <p class="score-label">${p?.rag_status ?? '—'} · CPSI Composite</p>
+    </div>
+  </div>
+
+  <h2>Tier 1 — Structural &amp; Energy Performance</h2>
+  <p class="body-text">Building era: <strong>${t1?.building_era ?? 'Not sourced'}</strong> · EPC: <strong>${t1?.epc_rating ?? '—'}</strong> &rarr; Potential: <strong>${t1?.potential_epc_rating ?? '—'}</strong></p>
+  <p class="note">${t1?.notes ?? ''}</p>
+
+  <h2>Tier 2 — Spatial &amp; Environmental Hazards <span class="badge">${t2?.status_label ?? 'Pending'}</span></h2>
+  <p class="note" style="font-style: italic;">${t2?.notes ?? 'Environmental hazard data not yet integrated.'}</p>
+
+  <h2>Tier 3 — Legal &amp; Tenure Restrictions</h2>
+  <p class="body-text">Tenure: <strong>${t3?.tenure ?? 'Not sourced'}</strong> · Inspire ID: <strong style="font-family:monospace;">${p?.inspireid ?? 'Unmatched'}</strong></p>
+  <p class="note">${t3?.notes ?? ''}</p>
+
+  <h2>Registry Lineage</h2>
+  <p class="lineage">HM Land Registry &middot; EPC Register &middot; OS MasterMap &middot; EA Flood Data — verify against live registries via the linked badges in-app.</p>
+
+  <div class="sign">
+    <div>Reviewed by: _____________________</div>
+    <div>Signature: _____________________</div>
+    <div>Date: _____________________</div>
+  </div>
+
+  <button class="print-btn" onclick="window.print()">Print</button>
+
+  <script>
+    window.onload = () => { window.print(); };
+  <\/script>
+</body>
+</html>`;
+
+      pw.document.open();
+      pw.document.write(html);
+      pw.document.close();
+    });
+  </script>
+</body>
+</html>
