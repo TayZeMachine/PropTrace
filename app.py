@@ -35,14 +35,15 @@ class BirminghamProperty(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     uprn = db.Column(db.BigInteger, unique=True, nullable=False)
     postcode = db.Column(db.String(10), nullable=False)
-    inspireid = db.Column(db.BigInteger)  # backfilled directly via spatial ST_Contains join, not via uprn_inspire_bridge
+    inspireid = db.Column(db.BigInteger) 
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
     epc_rating = db.Column(db.String(2))
     dominant_building_era = db.Column(db.String(5))
-    estimated_council_tax_band = db.Column(db.String(2))
     potential_epc_rating = db.Column(db.String(2))
     tenure = db.Column(db.String(2))
+    has_recorded_covenant = db.Column(db.Boolean, default=False)
+    in_flood_zone_3 = db.Column(db.Boolean, default=False)
 
 class BirminghamGeometry(db.Model):
     __tablename__ = 'birmingham_polygons'
@@ -101,24 +102,19 @@ def bbox_diagonal_metres(w, s, e, n):
 
 # --- CPSI SCORING ENGINE ---
 def calculate_cpsi_score(prop, legal_weight=0.4, env_weight=0.3, econ_weight=0.3):
-    # STAGE 1: Non-compensatory legal gate.
-    # NOTE: estimated_council_tax_band is still unsourced — no table in this
-    # project provides it (flagged when we first hit it; still your decision:
-    # source the VOA Council Tax Valuation List separately, drop the field,
-    # or use price as an explicitly-labelled proxy). Until that's resolved,
-    # this condition can never be true and the gate is structurally present
-    # but inert. Left as-is rather than silently substituting a different
-    # trigger — that's a real modelling decision, not mine to make for you.
-    if prop.tenure == 'LH' and prop.estimated_council_tax_band in ['G', 'H']:
-        return 1.00, "RED", "CRITICAL OVERRIDE: High risk tenure-to-holding layout captured."
+    # STAGE 1: Non-compensatory gates
+    if getattr(prop, 'has_recorded_covenant', False):
+        return 1.00, "RED", "CRITICAL OVERRIDE: Active restrictive covenant detected on Land Registry title."
+    
+    if getattr(prop, 'in_flood_zone_3', False):
+        return 1.00, "RED", "CRITICAL OVERRIDE: Property intersects EA Flood Zone 3 (High Risk)."
 
+    # STAGE 2: Compensatory WLC
     epc_map = {'A': 0.0, 'B': 0.1, 'C': 0.3, 'D': 0.5, 'E': 0.7, 'F': 0.9, 'G': 1.0}
     env_sub_score = epc_map.get(prop.epc_rating.upper() if prop.epc_rating else 'D', 0.5)
 
     econ_sub_score = 0.2
     if prop.dominant_building_era in ['PRE19', '1900', 'L', 'A']:
-        econ_sub_score += 0.4
-    if prop.estimated_council_tax_band in ['F', 'G', 'H', 'K']:
         econ_sub_score += 0.4
     econ_sub_score = min(econ_sub_score, 1.0)
 
@@ -207,11 +203,10 @@ def get_parcels_in_bbox():
         BirminghamGeometry, BirminghamProperty.inspireid == BirminghamGeometry.inspireid
     ).filter(ST_Intersects(ST_Transform(BirminghamGeometry.geometry, 4326), bbox_poly))
 
-    # ARBITRAGE FILTERING LOGIC
     if arbitrage_mode == 'retrofit':
         base_query = base_query.filter(BirminghamProperty.epc_rating.in_(['E', 'F', 'G']))
     elif arbitrage_mode == 'hmo':
-        base_query = base_query.filter(BirminghamProperty.estimated_council_tax_band.in_(['A', 'B']))
+        base_query = base_query.filter(BirminghamProperty.dominant_building_era.in_(['PRE19', '1900', 'L', 'A']))
 
     query_results = base_query.limit(150).all()
 
@@ -264,7 +259,7 @@ def site_assembly(inspireid):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- ROUTE 4: REPORT/CLICK METADATA (3-TIER AUDIT) ---
+# --- ROUTE UPDATE: REPORT METADATA ---
 @app.route('/api/property/report/<int:uprn>', methods=['GET'])
 def get_property_report(uprn):
     prop = BirminghamProperty.query.filter_by(uprn=uprn).first()
@@ -276,7 +271,7 @@ def get_property_report(uprn):
 
     inspireid = prop.inspireid
 
-    # --- Tier 1: Structural & Energy Performance ---
+    # Tier 1: Structural & Energy Performance
     epc_order = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4, 'F': 5, 'G': 6}
     current_rank = epc_order.get((prop.epc_rating or '').upper())
     potential_rank = epc_order.get((prop.potential_epc_rating or '').upper())
@@ -290,29 +285,29 @@ def get_property_report(uprn):
         "notes": f"Thermal performance deficit: {epc_gap_bands} band(s) of headroom between current and potential EPC." if epc_gap_bands else None
     }
 
-    # --- Tier 2: Spatial & Environmental Hazards ---
-    # Not yet sourced: no flood zone / brownfield layer is ingested into this
-    # schema. Structured so a future EA Flood API / brownfield ingest can
-    # slot straight into this shape without a breaking change.
+    # Tier 2: Spatial & Environmental Hazards
+    is_flood_risk = getattr(prop, 'in_flood_zone_3', False)
     tier_2_environmental = {
-        "data_available": False,
-        "status_label": "Pending EA Ingest",
-        "flood_zone": None,
-        "contaminated_land_flag": None,
-        "notes": "Environmental hazard data not yet integrated — pending Environment Agency flood zone / brownfield ingest."
+        "data_available": True,
+        "status_label": "FLOOD ZONE 3 (HIGH RISK)" if is_flood_risk else "LOW RISK / ZONE 1",
+        "is_high_risk": is_flood_risk,
+        "notes": "Property falls within EA Flood Zone 3 (high probability of river/sea flooding)." if is_flood_risk else "Property clear of high-risk flood zone boundaries."
     }
 
-    # --- Tier 3: Legal & Tenure Restrictions ---
+    # Tier 3: Legal & Tenure Restrictions
+    has_covenant = getattr(prop, 'has_recorded_covenant', False)
     tier_3_legal = {
         "tenure": "Leasehold" if prop.tenure == 'LH' else ("Freehold" if prop.tenure else None),
-        "notes": "Leasehold tenure typically carries mandatory structural maintenance fund obligations; Freehold relies on individual capital." if prop.tenure else None
+        "has_covenant": has_covenant,
+        "status_label": "RESTRICTIVE COVENANT" if has_covenant else "CLEAR TITLE",
+        "notes": "Active restrictive covenants recorded on Land Registry Title." if has_covenant else "No title encumbrances or recorded covenants detected."
     }
 
     payload = {
         "uprn": prop.uprn,
         "inspireid": inspireid,
         "postcode": prop.postcode,
-        "tenure": tier_3_legal["tenure"],  # kept at top level too — index.html reads p.tenure directly today
+        "tenure": tier_3_legal["tenure"], 
         "cpsi_score": cpsi,
         "rag_status": rag,
         "system_notes": notes,

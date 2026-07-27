@@ -67,3 +67,12 @@ The development of this project is governed by a disciplined, iterative Agile me
 Date Range: July 7 – July 14, 2026
 * **Objective:** Implement the core decision-making math and document system performance requirements.
 * **Deliverables:** Finalized the formal Functional and Non-Functional Requirements specifications. Programmed the two-stage Composite Property Suitability Index engine, deploying the Stage 1 non-compensatory circuit breaker to catch critical legal constraints alongside Stage 2 continuous weighting calculations.
+
+### Sprint 5: Full-Stack Integration, PostGIS Linkage & Schema Refactoring
+**Date Range: July 15 – July 27, 2026**
+* **Objective:** Elevate spatial/legal data precision, replace placeholder logic with live PostGIS indicators, refactor redundant schema columns, and wire end-to-end audit telemetry.
+* **Deliverables:**
+  * **Precision PostGIS Spatial Linkage:** Ingested the EA Flood Zone 3 shapefile (`staging.ea_flood_zones`) and executed BNG (`EPSG:27700`) point-in-polygon transformations (`ST_SetSRID`, `ST_Transform`, `ST_Intersects`). Resolved covenant over-flagging by matching HMLR `associated property description id` directly to cadastral `inspireid` keys, establishing realistic flag distributions across 624,394 master records (3,604 flood risks [~0.58%] and 9,354 covenants [~1.50%]).
+  * **Stage 1 Non-Compensatory Gate Elevation:** Refactored `calculate_cpsi_score()` to elevate both `has_recorded_covenant` and `in_flood_zone_3` into absolute non-compensatory circuit breakers. Either condition instantly triggers a 1.00 RED override prior to Stage 2 WLC slider evaluation.
+  * **Frontend-Driven Schema Audit & Refactoring:** Identified unsourced/redundant columns (e.g., `estimated_council_tax_band`) during active UI integration testing. Cleaned the master schema and `BirminghamProperty` ORM model, replacing dead attributes with native boolean flags (`has_recorded_covenant`, `in_flood_zone_3`) and updating the HMO arbitrage filter to target pre-1930s construction eras (`dominant_building_era`).
+  * **Live Telemetry & Report Generation:** Updated `/api/property/report/<uprn>` and `index.html` sidebar/PDF event handlers to render live, color-coded badges (`FLOOD ZONE 3 (HIGH RISK)` / `LOW RISK / ZONE 1` and `RESTRICTIVE COVENANT` / `CLEAR TITLE`), eliminating all static UI placeholders.

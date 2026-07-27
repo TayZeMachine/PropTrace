@@ -54,9 +54,15 @@
       </button>
     </div>
 
-    <div class="flex items-center space-x-2 w-80">
+    <div class="flex items-center space-x-2 w-80 relative">
       <input type="text" id="postcode-input" placeholder="e.g. B31 1TX" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-200 uppercase focus:border-blue-500 outline-none">
       <button id="btn-search" class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2 rounded-xl"><i class="fa-solid fa-bolt"></i></button>
+
+      <!-- MULTI-MATCH PICKER — shown when a postcode returns more than one property -->
+      <div id="search-picker" class="hidden absolute top-full mt-2 left-0 w-full bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-40 max-h-60 overflow-y-auto">
+        <p class="text-[9px] uppercase tracking-wider text-slate-500 px-3 pt-2">Select a specific property</p>
+        <div id="search-picker-list"></div>
+      </div>
     </div>
   </header>
 
@@ -248,6 +254,7 @@
   </div>
 
   <script>
+  document.addEventListener('DOMContentLoaded', () => {
     // REPLACE THIS WITH YOUR TOKEN!
     mapboxgl.accessToken = 'pk.eyJ1IjoidGF5YWIxMjMiLCJhIjoiY21yNjk1YWhpMGRtczJ5cjBkbDdkeHh4YyJ9.wqtBmgsI2K_hu0I-eF0RwA';
 
@@ -260,6 +267,24 @@
     let activeProperty = null;
     let currentFilter = null;
     let lastParcelFeatures = [];
+
+    // Every drag tick on a slider was firing a fresh network request with no
+    // ordering guarantee — a slow response to an OLD slider position could
+    // arrive after a newer one and silently overwrite it, which is what was
+    // showing up as colors "turning on and off randomly." These counters let
+    // each fetch check "am I still the most recent request?" before applying
+    // its result, and debounce() stops a drag from firing dozens of requests
+    // in the first place.
+    let parcelsRequestId = 0;
+    let reportRequestId = 0;
+
+    function debounce(fn, delay) {
+      let timer;
+      return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), delay);
+      };
+    }
 
     function showStatus(msg, isError = false) {
       const el = document.getElementById('status-toast');
@@ -287,11 +312,15 @@
       document.getElementById('lbl-env').innerText = w.envPct + '%';
       document.getElementById('lbl-econ').innerText = w.econPct + '%';
     }
+    const onWeightChange = debounce(() => {
+      fetchParcels();
+      if (activeProperty) fetchReport(activeProperty.uprn);
+    }, 250);
+
     ['weight-legal', 'weight-env', 'weight-econ'].forEach(id => {
       document.getElementById(id).addEventListener('input', () => {
-        updateWeightLabels();
-        fetchParcels();
-        if (activeProperty) fetchReport(activeProperty.uprn);
+        updateWeightLabels(); // instant visual feedback on the % labels
+        onWeightChange();     // debounced — actual re-score waits for you to pause
       });
     });
 
@@ -299,6 +328,7 @@
     map.on('load', () => {
       map.addSource('parcels', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addSource('assembly', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addSource('selected', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 
       map.addLayer({
         id: 'parcels-fill', type: 'fill', source: 'parcels',
@@ -308,6 +338,7 @@
         }
       });
       map.addLayer({ id: 'parcels-line', type: 'line', source: 'parcels', paint: { 'line-color': '#ffffff', 'line-width': 1, 'line-opacity': 0.3 } });
+      map.addLayer({ id: 'selected-line', type: 'line', source: 'selected', paint: { 'line-color': '#4C8DFF', 'line-width': 3, 'line-opacity': 0.95 } });
       map.addLayer({ id: 'assembly-line', type: 'line', source: 'assembly', paint: { 'line-color': '#6366f1', 'line-width': 4, 'line-opacity': 0.8 } });
 
       fetchParcels();
@@ -328,9 +359,15 @@
       let url = `http://127.0.0.1:5000/api/spatial/parcels?bounds=${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}&${weightQueryString()}`;
       if (currentFilter) url += `&filter=${currentFilter}`;
 
+      const thisRequest = ++parcelsRequestId;
+
       fetch(url)
         .then(r => r.json())
         .then(d => {
+          if (thisRequest !== parcelsRequestId) {
+            console.debug('[parcels] discarding stale response for request', thisRequest, '(latest is', parcelsRequestId + ')');
+            return;
+          }
           if (d.features) {
             map.getSource('parcels').setData(d);
             lastParcelFeatures = d.features;
@@ -343,6 +380,7 @@
           }
         })
         .catch(err => {
+          if (thisRequest !== parcelsRequestId) return;
           console.error('Parcel fetch failed:', err);
           showStatus('Could not load parcels — is the backend running?', true);
         });
@@ -353,40 +391,100 @@
     document.getElementById('btn-filter-hmo').addEventListener('click', () => { currentFilter = 'hmo'; fetchParcels(); document.getElementById('btn-filter-clear').classList.remove('hidden'); });
     document.getElementById('btn-filter-clear').addEventListener('click', (e) => { currentFilter = null; fetchParcels(); e.target.classList.add('hidden'); });
 
+    // Recursively pulls every [lng, lat] pair out of a GeoJSON geometry,
+    // regardless of whether it's a Polygon, MultiPolygon, etc. Avoids
+    // hardcoding an exact nesting depth (the previous coordinates[0][0]
+    // indexing assumed one specific depth, silently returned a single
+    // coordinate instead of a ring, and threw inside fitBounds — which is
+    // what was actually behind the "Search failed" toast, not the fetch).
+    function extractLngLats(geometry) {
+      const points = [];
+      (function walk(node) {
+        if (typeof node[0] === 'number') { points.push(node); return; }
+        node.forEach(walk);
+      })(geometry.coordinates);
+      return points;
+    }
+
     // ---------- POSTCODE SEARCH ----------
     document.getElementById('btn-search').addEventListener('click', () => {
       const pc = document.getElementById('postcode-input').value;
       if (!pc.trim()) return showStatus('Enter a postcode first.', true);
+      document.getElementById('search-picker').classList.add('hidden');
 
-      fetch(`http://127.0.0.1:5000/api/properties/${encodeURIComponent(pc)}?${weightQueryString()}`)
-        .then(r => r.json().then(d => ({ ok: r.ok, d })))
+      const url = `http://127.0.0.1:5000/api/properties/${encodeURIComponent(pc)}?${weightQueryString()}`;
+      console.log('[search] requesting', url);
+
+      fetch(url)
+        .then(r => {
+          console.log('[search] HTTP status:', r.status, r.ok);
+          return r.json()
+            .then(d => ({ ok: r.ok, d }))
+            .catch(parseErr => {
+              console.error('[search] response was not valid JSON:', parseErr);
+              throw new Error('Server returned a non-JSON response (check Flask logs for a 500/traceback).');
+            });
+        })
         .then(({ ok, d }) => {
+          console.log('[search] parsed body:', d);
+
           if (!ok || d.status === "error") {
-            showStatus(d.message || "No exact match found in database slice.", true);
+            console.warn('[search] backend reported an error:', d.message);
+            showStatus(d?.message || "No exact match found in database slice.", true);
             return;
           }
 
           const withGeom = d.properties.filter(p => p.geometry_geojson);
-          const withoutGeom = d.properties.filter(p => !p.geometry_geojson);
+          console.log(`[search] ${d.properties.length} propert(y/ies) matched, ${withGeom.length} with renderable geometry`);
 
           if (withGeom.length > 0) {
             const features = withGeom.map(p => ({ type: "Feature", geometry: JSON.parse(p.geometry_geojson), properties: p }));
             map.getSource('parcels').setData({ type: "FeatureCollection", features });
             lastParcelFeatures = features;
             renderDataTable();
-            const c = features[0].geometry.coordinates[0][0];
-            map.fitBounds(c.reduce((b, coord) => b.extend(coord), new mapboxgl.LngLatBounds(c[0], c[0])), { padding: 50 });
+
+            const allPoints = features.flatMap(f => extractLngLats(f.geometry));
+            if (allPoints.length > 0) {
+              const bounds = allPoints.reduce((b, coord) => b.extend(coord), new mapboxgl.LngLatBounds(allPoints[0], allPoints[0]));
+              map.fitBounds(bounds, { padding: 80, maxDuration: 900 });
+            }
           } else {
             showStatus(`Found ${d.properties.length} propert${d.properties.length === 1 ? 'y' : 'ies'} but no mapped parcel geometry yet — showing profile only.`);
           }
 
-          // Show the first match in the sidebar regardless of whether it has geometry
-          selectProperty(d.properties[0].uprn);
+          // Multiple properties share most postcodes — let the user pick a
+          // specific one instead of always defaulting to the first match.
+          const picker = document.getElementById('search-picker');
+          const pickerList = document.getElementById('search-picker-list');
+          if (d.properties.length > 1) {
+            pickerList.innerHTML = '';
+            d.properties.forEach(prop => {
+              const row = document.createElement('button');
+              row.className = 'w-full flex items-center justify-between px-3 py-2 text-left hover:bg-slate-800/60 text-xs border-t border-slate-800/60';
+              row.innerHTML = `<span class="font-data text-slate-300">${prop.uprn}</span><span class="px-2 py-0.5 rounded text-[9px] font-bold ${ragClass(prop.rag_status)}">${prop.rag_status}</span>`;
+              row.addEventListener('click', () => { selectProperty(prop.uprn); picker.classList.add('hidden'); });
+              pickerList.appendChild(row);
+            });
+            picker.classList.remove('hidden');
+          } else {
+            picker.classList.add('hidden');
+          }
+
+          // Still show the first match in the sidebar immediately so there's
+          // something to look at without forcing a click first.
+          selectProperty(d.properties[0]?.uprn);
         })
         .catch(err => {
-          console.error('Postcode search failed:', err);
-          showStatus('Search failed — is the backend running on port 5000?', true);
+          console.error('[search] fetch/processing failed:', err);
+          showStatus(err?.message || 'Search failed — is the backend running on port 5000?', true);
         });
+    });
+
+    document.addEventListener('click', (e) => {
+      const picker = document.getElementById('search-picker');
+      if (!picker.contains(e.target) && e.target.id !== 'postcode-input' && e.target.id !== 'btn-search') {
+        picker.classList.add('hidden');
+      }
     });
 
     // ---------- SELECT PROPERTY (map click or table row) ----------
@@ -395,16 +493,33 @@
     function selectProperty(uprn) {
       switchDock('map');
       document.getElementById('active-uprn').innerText = `UPRN: ${uprn}`;
+      document.getElementById('cpsi-badge').classList.add('animate-pulse'); // loading feedback — a slow response now looks intentional, not broken
+      highlightSelected(uprn);
       fetchReport(uprn);
     }
 
+    // Outlines whichever parcel is currently loaded in the sidebar, so it's
+    // visually obvious what you're looking at on a map full of similar shapes.
+    function highlightSelected(uprn) {
+      if (!map.getSource('selected')) return;
+      const match = lastParcelFeatures.find(f => f.properties.uprn === uprn);
+      map.getSource('selected').setData({ type: 'FeatureCollection', features: match ? [match] : [] });
+    }
+
     function fetchReport(uprn) {
+      const thisRequest = ++reportRequestId;
+
       fetch(`http://127.0.0.1:5000/api/property/report/${uprn}?${weightQueryString()}`)
         .then(r => {
           if (!r.ok) throw new Error(`Server responded ${r.status}`);
           return r.json();
         })
         .then(d => {
+          document.getElementById('cpsi-badge').classList.remove('animate-pulse');
+          if (thisRequest !== reportRequestId) {
+            console.debug('[report] discarding stale response for request', thisRequest);
+            return;
+          }
           activeProperty = d.report;
           document.getElementById('welcome-panel').classList.add('hidden');
           document.getElementById('data-content').classList.remove('hidden');
@@ -421,6 +536,8 @@
           updateUI(activeProperty);
         })
         .catch(err => {
+          document.getElementById('cpsi-badge').classList.remove('animate-pulse');
+          if (thisRequest !== reportRequestId) return;
           console.error('Report fetch failed:', err);
           showStatus('Could not load property report — is the backend running?', true);
         });
@@ -445,7 +562,7 @@
 
     function updateUI(p) {
       const badge = document.getElementById('cpsi-badge');
-      badge.innerText = parseFloat(p?.cpsi_score ?? 0).toFixed(2);
+      badge.innerText = (p?.cpsi_score !== null && p?.cpsi_score !== undefined) ? parseFloat(p.cpsi_score).toFixed(2) : 'N/A';
       badge.className = `text-xs font-bold rounded-xl px-3 py-1.5 shadow-inner font-data ${p?.rag_status === "GREEN" ? "text-emerald-400 bg-emerald-950/30 border border-emerald-900/50" : p?.rag_status === "AMBER" ? "text-amber-400 bg-amber-950/30 border border-amber-900/50" : "text-red-500 bg-red-950/40 border border-red-900/50"}`;
 
       const t1 = p?.tiers?.tier_1_structural;
@@ -454,14 +571,24 @@
       document.getElementById('t1-notes').innerText = t1?.notes || '';
 
       const t2 = p?.tiers?.tier_2_environmental;
-      document.getElementById('t2-notes').innerText = t2?.notes || 'Not yet available.';
-      document.getElementById('t2-badge').innerText = t2?.status_label || 'Pending';
+      document.getElementById('t2-notes').innerText = t2?.notes || 'Data unavailable.';
+      const t2Badge = document.getElementById('t2-badge');
+      t2Badge.innerText = t2?.status_label || 'Pending';
+      if (t2?.is_high_risk) {
+          t2Badge.className = "text-[8px] font-bold uppercase tracking-wider bg-red-950/40 text-red-500 border border-red-800/50 px-1.5 py-0.5 rounded shrink-0 ml-2";
+      } else {
+          t2Badge.className = "text-[8px] font-bold uppercase tracking-wider bg-emerald-950/40 text-emerald-500 border border-emerald-800/50 px-1.5 py-0.5 rounded shrink-0 ml-2";
+      }
 
       const t3 = p?.tiers?.tier_3_legal;
       document.getElementById('t3-tenure').innerText = t3?.tenure || 'Not sourced';
       document.getElementById('t3-inspireid').innerText = p?.inspireid ?? 'Unmatched';
-      document.getElementById('t3-notes').innerText = t3?.notes || '';
-    }
+      document.getElementById('t3-notes').innerHTML = `
+          <span class="block mb-1 font-bold ${t3?.has_covenant ? 'text-red-400' : 'text-emerald-400'}">
+              ${t3?.status_label || ''}
+          </span>
+          ${t3?.notes || ''}
+      `;}
 
     // ---------- DOCK ----------
     function switchDock(mode) {
@@ -543,21 +670,29 @@
       document.getElementById('sidebar').style.width = sidebarCollapsed ? '0px' : '24rem';
       document.getElementById('sidebar-inner').classList.toggle('hidden', sidebarCollapsed);
       document.getElementById('collapse-icon').className = sidebarCollapsed ? 'fa-solid fa-chevron-left' : 'fa-solid fa-chevron-right';
+      // Mapbox's WebGL canvas doesn't auto-resize when its container's CSS
+      // width changes — without this the map stays clipped/misaligned to its
+      // old dimensions after the sidebar opens or closes.
+      setTimeout(() => map.resize(), 200);
     });
 
     // ---------- AUDIT REPORT ----------
     document.getElementById('btn-print').addEventListener('click', () => {
       const p = activeProperty;
-      if (!p) { showStatus('Select a property first.', true); return; }
+      console.log('[report] activeProperty at click time:', p);
+      if (!p) { console.warn('[report] no property selected, aborting'); showStatus('Select a property first.', true); return; }
 
       const pw = window.open('', '_blank', 'width=850,height=1000');
-      if (!pw) { showStatus('Popup blocked — allow popups for this site to generate the report.', true); return; }
+      if (!pw) { console.error('[report] window.open returned null — popup likely blocked'); showStatus('Popup blocked — allow popups for this site to generate the report.', true); return; }
 
       const t1 = p?.tiers?.tier_1_structural;
       const t2 = p?.tiers?.tier_2_environmental;
       const t3 = p?.tiers?.tier_3_legal;
       const ragColor = p?.rag_status === 'RED' ? '#dc2626' : p?.rag_status === 'AMBER' ? '#d97706' : '#059669';
-
+      const t2BadgeColor = t2?.is_high_risk ? '#991b1b' : '#166534';
+      const t2BadgeBg = t2?.is_high_risk ? '#fef2f2' : '#f0fdf4';
+      const t3BadgeColor = t3?.has_covenant ? '#991b1b' : '#166534';
+      const t3BadgeBg = t3?.has_covenant ? '#fef2f2' : '#f0fdf4';
       const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -597,10 +732,11 @@
   <p class="body-text">Building era: <strong>${t1?.building_era ?? 'Not sourced'}</strong> · EPC: <strong>${t1?.epc_rating ?? '—'}</strong> &rarr; Potential: <strong>${t1?.potential_epc_rating ?? '—'}</strong></p>
   <p class="note">${t1?.notes ?? ''}</p>
 
-  <h2>Tier 2 — Spatial &amp; Environmental Hazards <span class="badge">${t2?.status_label ?? 'Pending'}</span></h2>
-  <p class="note" style="font-style: italic;">${t2?.notes ?? 'Environmental hazard data not yet integrated.'}</p>
+  <!-- WITH THIS -->
+  <h2>Tier 2 — Spatial &amp; Environmental Hazards <span class="badge" style="background:${t2BadgeBg}; color:${t2BadgeColor}; border: 1px solid ${t2BadgeColor};">${t2?.status_label ?? 'Pending'}</span></h2>
+  <p class="body-text">${t2?.notes ?? 'Environmental hazard data not yet integrated.'}</p>
 
-  <h2>Tier 3 — Legal &amp; Tenure Restrictions</h2>
+  <h2>Tier 3 — Legal &amp; Tenure Restrictions <span class="badge" style="background:${t3BadgeBg}; color:${t3BadgeColor}; border: 1px solid ${t3BadgeColor};">${t3?.status_label ?? 'Pending'}</span></h2>
   <p class="body-text">Tenure: <strong>${t3?.tenure ?? 'Not sourced'}</strong> · Inspire ID: <strong style="font-family:monospace;">${p?.inspireid ?? 'Unmatched'}</strong></p>
   <p class="note">${t3?.notes ?? ''}</p>
 
@@ -621,10 +757,17 @@
 </body>
 </html>`;
 
-      pw.document.open();
-      pw.document.write(html);
-      pw.document.close();
+      try {
+        pw.document.open();
+        pw.document.write(html);
+        pw.document.close();
+        console.log('[report] document written and closed successfully');
+      } catch (err) {
+        console.error('[report] failed to write report document:', err);
+        showStatus('Report generation failed — check console for details.', true);
+      }
     });
+  }); // end DOMContentLoaded
   </script>
 </body>
 </html>
