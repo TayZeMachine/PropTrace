@@ -28,6 +28,18 @@
   #sidebar { transition: width .18s ease; }
   .lineage-badge { background: #020617; border: 1px solid #1e293b; color: #94a3b8; padding: 6px; border-radius: 6px; display: flex; align-items: center; gap: 5px; font-size: 10px; }
   .lineage-badge:hover { border-color: #4C8DFF; color: #cbd5e1; }
+  
+  /* Active filter visual states */
+  .btn-filter-active-retrofit { background-color: rgba(6, 78, 59, 0.9) !important; border-color: #10b981 !important; color: #ffffff !important; box-shadow: 0 0 12px rgba(16, 185, 129, 0.4); }
+  .btn-filter-active-hmo { background-color: rgba(88, 28, 135, 0.9) !important; border-color: #a855f7 !important; color: #ffffff !important; box-shadow: 0 0 12px rgba(168, 85, 247, 0.4); }
+
+  /* [UX] Distinct treatment for "not sourced" / unverified fields, so a data
+     gap reads as a deliberate unknown state rather than a broken value. */
+  .value-unsourced { font-style: italic; color: #64748b !important; }
+  .badge-pending { background: rgba(30,41,59,0.6); color: #94a3b8; border: 1px solid #334155; }
+
+  /* Simple SVG ring gauge for the CPSI score badge */
+  .cpsi-gauge-ring { transform: rotate(-90deg); transform-origin: 50% 50%; transition: stroke-dashoffset .3s ease, stroke .3s ease; }
 </style>
 </head>
 <body class="bg-slate-950 text-slate-100 h-screen flex flex-col">
@@ -58,7 +70,6 @@
       <input type="text" id="postcode-input" placeholder="e.g. B31 1TX" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-200 uppercase focus:border-blue-500 outline-none">
       <button id="btn-search" class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-4 py-2 rounded-xl"><i class="fa-solid fa-bolt"></i></button>
 
-      <!-- MULTI-MATCH PICKER — shown when a postcode returns more than one property -->
       <div id="search-picker" class="hidden absolute top-full mt-2 left-0 w-full bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-40 max-h-60 overflow-y-auto">
         <p class="text-[9px] uppercase tracking-wider text-slate-500 px-3 pt-2">Select a specific property</p>
         <div id="search-picker-list"></div>
@@ -100,7 +111,7 @@
       </div>
 
       <!-- DATA TABLE PANEL -->
-      <div id="panel-table" class="hidden absolute inset-4 bg-slate-900/97 backdrop-blur-md border border-slate-800 rounded-2xl shadow-2xl z-20 flex flex-col">
+      <div id="panel-table" class="hidden absolute inset-4 bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl z-20 flex flex-col">
         <div class="p-4 border-b border-slate-800 flex items-center justify-between">
           <h2 class="text-xs font-bold uppercase text-slate-300"><i class="fa-solid fa-table-cells text-blue-400"></i> Parcels in Current View</h2>
           <span id="data-table-count" class="text-[10px] text-slate-500 font-data">0 parcels</span>
@@ -120,11 +131,19 @@
         <i class="fa-solid fa-magnifying-glass-plus"></i> Please zoom in to view parcel data.
       </div>
 
-      <!-- GENERAL STATUS TOAST (search results, network errors) -->
+      <!-- GENERAL STATUS TOAST -->
       <div id="status-toast" class="hidden absolute top-4 left-1/2 -translate-x-1/2 bg-slate-800/95 border border-slate-600 text-slate-200 text-xs font-semibold px-4 py-2 rounded-lg shadow-xl z-30"></div>
 
       <!-- COORDINATE READOUT -->
       <div id="coord-readout" class="absolute bottom-3 left-3 text-[10px] font-data text-slate-500 bg-slate-950/70 border border-slate-800/60 px-2 py-1 rounded z-20">--.------°, --.------° · z--.-</div>
+
+      <!-- MAP LEGEND -->
+      <div class="absolute bottom-3 right-3 bg-slate-950/85 backdrop-blur-sm border border-slate-800/60 rounded-lg px-3 py-2 z-20 space-y-1.5">
+        <p class="text-[8px] font-bold uppercase tracking-wider text-slate-500 mb-1">RAG Status</p>
+        <div class="flex items-center gap-2 text-[10px] text-slate-300"><span class="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0"></span>High risk / gate failure</div>
+        <div class="flex items-center gap-2 text-[10px] text-slate-300"><span class="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0"></span>Moderate / retrofit opportunity</div>
+        <div class="flex items-center gap-2 text-[10px] text-slate-300"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0"></span>Low risk / compliant</div>
+      </div>
     </div>
 
     <!-- RIGHT SIDEBAR -->
@@ -140,7 +159,13 @@
               <h2 class="text-xs font-bold uppercase text-slate-400">CPSI Telemetry</h2>
               <p id="active-uprn" class="text-[10px] font-data text-slate-500 mt-0.5">No Asset Selected</p>
             </div>
-            <div id="cpsi-badge" class="text-xs font-bold text-slate-500 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 shadow-inner font-data">N/A</div>
+            <div class="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 shadow-inner">
+              <svg width="28" height="28" viewBox="0 0 28 28">
+                <circle cx="14" cy="14" r="11" fill="none" stroke="#1e293b" stroke-width="3"></circle>
+                <circle id="cpsi-gauge-arc" class="cpsi-gauge-ring" cx="14" cy="14" r="11" fill="none" stroke="#64748b" stroke-width="3" stroke-linecap="round" stroke-dasharray="69.1" stroke-dashoffset="69.1"></circle>
+              </svg>
+              <div id="cpsi-badge" class="text-xs font-bold text-slate-500 font-data">N/A</div>
+            </div>
           </div>
           <button id="btn-site-assembly" class="mt-4 w-full bg-indigo-600/20 text-indigo-400 border border-indigo-600/50 hover:bg-indigo-600 hover:text-white rounded-lg py-2 text-[10px] font-bold uppercase tracking-wider transition-all hidden">
             <i class="fa-solid fa-object-group"></i> Scan for Site Assembly
@@ -255,29 +280,60 @@
 
   <script>
   document.addEventListener('DOMContentLoaded', () => {
-    // REPLACE THIS WITH YOUR TOKEN!
     mapboxgl.accessToken = 'pk.eyJ1IjoidGF5YWIxMjMiLCJhIjoiY21yNjk1YWhpMGRtczJ5cjBkbDdkeHh4YyJ9.wqtBmgsI2K_hu0I-eF0RwA';
+
+    // [PERF] COLD START FIX ------------------------------------------------
+    // The old init used a fixed `center` + `zoom: 13`. At zoom 13 the
+    // viewport diagonal is well over the 5km BBOX_LIMIT_METRES safety
+    // limit, so the very first thing every user saw was the "please zoom
+    // in" toast — no parcels ever rendered on first paint.
+    //
+    // Rather than hand-picking a zoom level (fragile — the right zoom for
+    // a 5km limit depends on the container's pixel size, which varies with
+    // window size and whether the sidebar is open), we give Mapbox a fixed
+    // real-world default Area of Interest and let `fitBounds` compute
+    // whatever zoom is needed to frame it exactly. That guarantees a
+    // sensible, populated initial view regardless of screen size.
+    const DEFAULT_AOI = { west: -1.9037, south: 52.4781, east: -1.8771, north: 52.4943 };
+    const DEFAULT_AOI_BOUNDS_STR = `${DEFAULT_AOI.west},${DEFAULT_AOI.south},${DEFAULT_AOI.east},${DEFAULT_AOI.north}`;
 
     const map = new mapboxgl.Map({
       container: 'map',
       style: 'mapbox://styles/mapbox/dark-v11',
-      center: [-1.8904, 52.4862], zoom: 13
+      bounds: [[DEFAULT_AOI.west, DEFAULT_AOI.south], [DEFAULT_AOI.east, DEFAULT_AOI.north]],
+      fitBoundsOptions: { padding: 0 }
     });
+
+    function haversineMetres(w, s, e, n) {
+      const R = 6371000;
+      const toRad = d => d * Math.PI / 180;
+      const dLat = toRad(n - s), dLng = toRad(e - w);
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(s)) * Math.cos(toRad(n)) * Math.sin(dLng / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(Math.min(1, a)));
+    }
+
+    // Defensive safety net: fitBounds fits the AOI's *constraining*
+    // dimension to the container, but on an unusually wide (or
+    // unusually short) container — an ultrawide monitor, or the right
+    // sidebar collapsed — the other dimension can end up wider than the
+    // AOI itself. This checks the actual rendered viewport after the map
+    // settles and nudges zoom in if it would still trip the 5km server
+    // limit, instead of assuming any particular screen shape up front.
+    function ensureWithinBboxLimit() {
+      const b = map.getBounds();
+      const diag = haversineMetres(b.getWest(), b.getSouth(), b.getEast(), b.getNorth());
+      if (diag > 4800) {
+        map.setZoom(map.getZoom() + Math.log2(diag / 4800) + 0.05);
+      }
+    }
 
     let activeProperty = null;
     let currentFilter = null;
     let lastParcelFeatures = [];
-
-    // Every drag tick on a slider was firing a fresh network request with no
-    // ordering guarantee — a slow response to an OLD slider position could
-    // arrive after a newer one and silently overwrite it, which is what was
-    // showing up as colors "turning on and off randomly." These counters let
-    // each fetch check "am I still the most recent request?" before applying
-    // its result, and debounce() stops a drag from firing dozens of requests
-    // in the first place.
     let parcelsRequestId = 0;
     let reportRequestId = 0;
-
+    let currentParcelsAbort = null;
+    
     function debounce(fn, delay) {
       let timer;
       return (...args) => {
@@ -294,37 +350,129 @@
       window.__statusTimer = setTimeout(() => el.classList.add('hidden'), 4000);
     }
 
-    // ---------- WEIGHTS ----------
     function currentWeights() {
       const legal = parseFloat(document.getElementById('weight-legal').value);
       const env = parseFloat(document.getElementById('weight-env').value);
       const econ = parseFloat(document.getElementById('weight-econ').value);
       const total = (legal + env + econ) || 1;
-      return { legal, env, econ, legalPct: Math.round(100 * legal / total), envPct: Math.round(100 * env / total), econPct: Math.round(100 * econ / total) };
+      return { legal: legal / total, env: env / total, econ: econ / total, legalPct: Math.round(100 * legal / total), envPct: Math.round(100 * env / total), econPct: Math.round(100 * econ / total) };
     }
+
     function weightQueryString() {
       const w = currentWeights();
       return `legal_weight=${w.legal}&env_weight=${w.env}&econ_weight=${w.econ}`;
     }
+
     function updateWeightLabels() {
       const w = currentWeights();
       document.getElementById('lbl-legal').innerText = w.legalPct + '%';
       document.getElementById('lbl-env').innerText = w.envPct + '%';
       document.getElementById('lbl-econ').innerText = w.econPct + '%';
     }
-    const onWeightChange = debounce(() => {
-      fetchParcels();
-      if (activeProperty) fetchReport(activeProperty.uprn);
-    }, 250);
+
+    // --- CLIENT-SIDE CPSI CALCULATION (UPDATED SYNC) ---
+    // [PERF] This function runs on every single `input` tick while a slider
+    // is being dragged — potentially dozens of times a second. The old
+    // version called map.getSource('parcels').setData(...) with the full
+    // FeatureCollection every tick, which forces Mapbox GL to re-parse and
+    // re-tile every polygon's geometry from scratch just to change a fill
+    // color. setFeatureState updates only the paint-relevant state for
+    // each feature by id — geometry is untouched, so a slider drag becomes
+    // a cheap GPU-side repaint instead of a full source reload.
+    function recalculateLocalCPSI() {
+      const w = currentWeights();
+      const epcMap = {'A': 0.0, 'B': 0.1, 'C': 0.3, 'D': 0.5, 'E': 0.7, 'F': 0.9, 'G': 1.0};
+      const source = map.getSource('parcels');
+
+      lastParcelFeatures.forEach(f => {
+        const p = f.properties;
+        let composite, rag;
+
+        if (p.has_recorded_covenant || p.in_flood_zone_3) {
+          composite = 1.00;
+          rag = "RED";
+        } else {
+          const envSub = epcMap[(p.epc_rating || '').toUpperCase()] ?? 0.5;
+
+          // [UPDATED] Uses identical A-L era calculation logic to match backend
+          let econSub = 0.2;
+          const era = p.dominant_building_era;
+          if (era === 'A') econSub = 1.00;
+          else if (['B', 'C', 'D'].includes(era)) econSub = 0.75;
+          else if (['E', 'F', 'G'].includes(era)) econSub = 0.50;
+          else if (['H', 'I', 'J'].includes(era)) econSub = 0.25;
+          else if (['K', 'L'].includes(era)) econSub = 0.00;
+
+          const legalSub = (p.tenure === 'LH') ? 0.4 : 0.1;
+
+          composite = (w.legal * legalSub) + (w.env * envSub) + (w.econ * econSub);
+          composite = Math.round(Math.max(0.0, Math.min(composite, 1.0)) * 1000) / 1000;
+          rag = composite >= 0.75 ? "RED" : composite >= 0.40 ? "AMBER" : "GREEN";
+        }
+
+        p.cpsi_score = composite;
+        p.rag_status = rag;
+
+        // GPU-side paint update only — no geometry re-parse, no setData.
+        if (source && f.id !== undefined && f.id !== null) {
+          map.setFeatureState({ source: 'parcels', id: f.id }, { rag_status: rag });
+        }
+
+        // [UPDATED] Live Sidebar State Synchronization Logic
+        if (activeProperty && activeProperty.uprn === p.uprn) {
+            const sidebarBadge = document.getElementById('cpsi-badge');
+            if (sidebarBadge) {
+                sidebarBadge.innerText = composite.toFixed(2);
+                sidebarBadge.className = `text-xs font-bold font-data ${
+                    rag === "GREEN" ? "text-emerald-400" : 
+                    rag === "AMBER" ? "text-amber-400" : 
+                    "text-red-500"
+                }`;
+                updateCpsiGauge(composite, rag);
+            }
+        }
+      });
+
+      renderDataTable();
+      
+      // Removed the redundant `fetchReport` call here to prevent server spam while sliding
+    }
 
     ['weight-legal', 'weight-env', 'weight-econ'].forEach(id => {
       document.getElementById(id).addEventListener('input', () => {
-        updateWeightLabels(); // instant visual feedback on the % labels
-        onWeightChange();     // debounced — actual re-score waits for you to pause
+        updateWeightLabels();
+        recalculateLocalCPSI();
       });
     });
 
-    // ---------- MAP SOURCES/LAYERS ----------
+    // [PERF] INITIAL LOAD LATENCY FIX --------------------------------------
+    // Previously the very first parcel fetch didn't start until AFTER the
+    // Mapbox style had finished loading (map.on('load', () => { ...
+    // fetchParcels() })) — a fully serial chain: style load, THEN network
+    // round trip, THEN render. Since we already know the default AOI
+    // synchronously (it's a fixed constant, not derived from the map),
+    // we kick that fetch off immediately, in parallel with the map/style
+    // initializing, so by the time layers are ready the data is often
+    // already back.
+    const initialParcelsPromise = fetchParcelsForBounds(DEFAULT_AOI_BOUNDS_STR);
+
+    // Applies a fetched FeatureCollection to the map source. Safe to call
+    // from a Promise .then() anywhere below: .then() callbacks always run
+    // as a microtask, never synchronously — so even if this initial fetch
+    // has already resolved by the time 'load' fires, calling
+    // initialParcelsPromise.then(applyParcelsData) from inside the load
+    // handler (below) is still guaranteed to run AFTER that handler's own
+    // synchronous addSource() call, never before it.
+    function applyParcelsData(d) {
+      if (!d || !d.features) return;
+      const source = map.getSource('parcels');
+      if (!source) return;
+      source.setData(d);
+      lastParcelFeatures = d.features;
+      renderDataTable();
+      document.getElementById('zoom-toast').classList.add('hidden');
+    }
+
     map.on('load', () => {
       map.addSource('parcels', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addSource('assembly', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -333,70 +481,110 @@
       map.addLayer({
         id: 'parcels-fill', type: 'fill', source: 'parcels',
         paint: {
-          'fill-color': ['case', ['==', ['get', 'rag_status'], 'RED'], '#ef4444', ['==', ['get', 'rag_status'], 'AMBER'], '#f59e0b', '#10b981'],
-          'fill-opacity': 0.4
+          // Reads feature-state first (set instantly by recalculateLocalCPSI
+          // via setFeatureState) and falls back to the GeoJSON property for
+          // features that haven't had their state touched yet.
+          'fill-color': [
+            'case',
+            ['==', ['coalesce', ['feature-state', 'rag_status'], ['get', 'rag_status']], 'RED'], '#ef4444',
+            ['==', ['coalesce', ['feature-state', 'rag_status'], ['get', 'rag_status']], 'AMBER'], '#f59e0b',
+            '#10b981'
+          ],
+          'fill-opacity': [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false], 0.65,
+            0.4
+          ]
         }
       });
       map.addLayer({ id: 'parcels-line', type: 'line', source: 'parcels', paint: { 'line-color': '#ffffff', 'line-width': 1, 'line-opacity': 0.3 } });
       map.addLayer({ id: 'selected-line', type: 'line', source: 'selected', paint: { 'line-color': '#4C8DFF', 'line-width': 3, 'line-opacity': 0.95 } });
       map.addLayer({ id: 'assembly-line', type: 'line', source: 'assembly', paint: { 'line-color': '#6366f1', 'line-width': 4, 'line-opacity': 0.8 } });
 
-      fetchParcels();
+      ensureWithinBboxLimit();
+      initialParcelsPromise.then(applyParcelsData);
     });
 
-    map.on('moveend', () => {
+    // Debounce map panning to prevent server spam
+    const onMapPan = debounce(() => {
       fetchParcels();
       if (!document.getElementById('tab-executive').classList.contains('hidden')) fetchBboxStats();
-    });
+    }, 250); 
+
+    map.on('moveend', onMapPan);
 
     map.on('mousemove', (e) => {
       document.getElementById('coord-readout').innerText = `${e.lngLat.lat.toFixed(6)}°, ${e.lngLat.lng.toFixed(6)}° · z${map.getZoom().toFixed(1)}`;
     });
 
-    // ---------- PARCELS (5km-gate aware) ----------
-    function fetchParcels() {
-      const b = map.getBounds();
-      let url = `http://127.0.0.1:5000/api/spatial/parcels?bounds=${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}&${weightQueryString()}`;
+    // [PERF] Cancels the previous in-flight request (via AbortController)
+    // whenever a new one starts, so a fast pan/zoom sequence doesn't leave
+    // multiple large GeoJSON responses being downloaded and parsed only to
+    // be thrown away by the parcelsRequestId staleness check. Also passes
+    // the current zoom to the backend so it can pick a coarser/finer
+    // simplify tolerance depending on how zoomed in the view is.
+    function fetchParcelsForBounds(boundsStr) {
+      const thisRequest = ++parcelsRequestId;
+      if (currentParcelsAbort) currentParcelsAbort.abort();
+      const controller = new AbortController();
+      currentParcelsAbort = controller;
+
+      const zoom = (typeof map.getZoom() === 'number' && !Number.isNaN(map.getZoom())) ? map.getZoom() : 15;
+      let url = `/api/spatial/parcels?bounds=${boundsStr}&zoom=${zoom.toFixed(1)}&${weightQueryString()}`;
       if (currentFilter) url += `&filter=${currentFilter}`;
 
-      const thisRequest = ++parcelsRequestId;
-
-      fetch(url)
+      return fetch(url, { signal: controller.signal })
         .then(r => r.json())
         .then(d => {
-          if (thisRequest !== parcelsRequestId) {
-            console.debug('[parcels] discarding stale response for request', thisRequest, '(latest is', parcelsRequestId + ')');
-            return;
-          }
-          if (d.features) {
-            map.getSource('parcels').setData(d);
-            lastParcelFeatures = d.features;
-            renderDataTable();
-            document.getElementById('zoom-toast').classList.add('hidden');
-            if (d.debug) console.debug('[parcels coverage]', d.debug);
-          } else if (d.message) {
+          if (thisRequest !== parcelsRequestId) return null;
+          if (d.message && !d.features) {
             document.getElementById('zoom-toast').innerHTML = `<i class="fa-solid fa-magnifying-glass-plus"></i> ${d.message}`;
             document.getElementById('zoom-toast').classList.remove('hidden');
           }
+          return d;
         })
         .catch(err => {
-          if (thisRequest !== parcelsRequestId) return;
-          console.error('Parcel fetch failed:', err);
+          if (err.name === 'AbortError') return null;
+          if (thisRequest !== parcelsRequestId) return null;
           showStatus('Could not load parcels — is the backend running?', true);
+          return null;
         });
     }
 
-    // ---------- ARBITRAGE FILTERS ----------
-    document.getElementById('btn-filter-retrofit').addEventListener('click', () => { currentFilter = 'retrofit'; fetchParcels(); document.getElementById('btn-filter-clear').classList.remove('hidden'); });
-    document.getElementById('btn-filter-hmo').addEventListener('click', () => { currentFilter = 'hmo'; fetchParcels(); document.getElementById('btn-filter-clear').classList.remove('hidden'); });
-    document.getElementById('btn-filter-clear').addEventListener('click', (e) => { currentFilter = null; fetchParcels(); e.target.classList.add('hidden'); });
+    function fetchParcels() {
+      const b = map.getBounds();
+      return fetchParcelsForBounds(`${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`).then(applyParcelsData);
+    }
 
-    // Recursively pulls every [lng, lat] pair out of a GeoJSON geometry,
-    // regardless of whether it's a Polygon, MultiPolygon, etc. Avoids
-    // hardcoding an exact nesting depth (the previous coordinates[0][0]
-    // indexing assumed one specific depth, silently returned a single
-    // coordinate instead of a ring, and threw inside fitBounds — which is
-    // what was actually behind the "Search failed" toast, not the fetch).
+    // ARBITRAGE FILTERS WITH VISUAL STATES
+    const btnRetrofit = document.getElementById('btn-filter-retrofit');
+    const btnHmo = document.getElementById('btn-filter-hmo');
+    const btnClear = document.getElementById('btn-filter-clear');
+
+    btnRetrofit.addEventListener('click', () => { 
+      currentFilter = 'retrofit'; 
+      btnRetrofit.classList.add('btn-filter-active-retrofit');
+      btnHmo.classList.remove('btn-filter-active-hmo');
+      btnClear.classList.remove('hidden'); 
+      fetchParcels(); 
+    });
+
+    btnHmo.addEventListener('click', () => { 
+      currentFilter = 'hmo'; 
+      btnHmo.classList.add('btn-filter-active-hmo');
+      btnRetrofit.classList.remove('btn-filter-active-retrofit');
+      btnClear.classList.remove('hidden'); 
+      fetchParcels(); 
+    });
+
+    btnClear.addEventListener('click', () => { 
+      currentFilter = null; 
+      btnRetrofit.classList.remove('btn-filter-active-retrofit');
+      btnHmo.classList.remove('btn-filter-active-hmo');
+      btnClear.classList.add('hidden'); 
+      fetchParcels(); 
+    });
+
     function extractLngLats(geometry) {
       const points = [];
       (function walk(node) {
@@ -406,39 +594,25 @@
       return points;
     }
 
-    // ---------- POSTCODE SEARCH ----------
     document.getElementById('btn-search').addEventListener('click', () => {
       const pc = document.getElementById('postcode-input').value;
       if (!pc.trim()) return showStatus('Enter a postcode first.', true);
       document.getElementById('search-picker').classList.add('hidden');
 
-      const url = `http://127.0.0.1:5000/api/properties/${encodeURIComponent(pc)}?${weightQueryString()}`;
-      console.log('[search] requesting', url);
+      const url = `/api/properties/${encodeURIComponent(pc)}?${weightQueryString()}`;
 
       fetch(url)
-        .then(r => {
-          console.log('[search] HTTP status:', r.status, r.ok);
-          return r.json()
-            .then(d => ({ ok: r.ok, d }))
-            .catch(parseErr => {
-              console.error('[search] response was not valid JSON:', parseErr);
-              throw new Error('Server returned a non-JSON response (check Flask logs for a 500/traceback).');
-            });
-        })
+        .then(r => r.json().then(d => ({ ok: r.ok, d })))
         .then(({ ok, d }) => {
-          console.log('[search] parsed body:', d);
-
           if (!ok || d.status === "error") {
-            console.warn('[search] backend reported an error:', d.message);
             showStatus(d?.message || "No exact match found in database slice.", true);
             return;
           }
 
           const withGeom = d.properties.filter(p => p.geometry_geojson);
-          console.log(`[search] ${d.properties.length} propert(y/ies) matched, ${withGeom.length} with renderable geometry`);
 
           if (withGeom.length > 0) {
-            const features = withGeom.map(p => ({ type: "Feature", geometry: JSON.parse(p.geometry_geojson), properties: p }));
+            const features = withGeom.map(p => ({ type: "Feature", id: p.inspireid, geometry: JSON.parse(p.geometry_geojson), properties: p }));
             map.getSource('parcels').setData({ type: "FeatureCollection", features });
             lastParcelFeatures = features;
             renderDataTable();
@@ -449,11 +623,9 @@
               map.fitBounds(bounds, { padding: 80, maxDuration: 900 });
             }
           } else {
-            showStatus(`Found ${d.properties.length} propert${d.properties.length === 1 ? 'y' : 'ies'} but no mapped parcel geometry yet — showing profile only.`);
+            showStatus(`Found ${d.properties.length} propert${d.properties.length === 1 ? 'y' : 'ies'} but no mapped parcel geometry yet.`);
           }
 
-          // Multiple properties share most postcodes — let the user pick a
-          // specific one instead of always defaulting to the first match.
           const picker = document.getElementById('search-picker');
           const pickerList = document.getElementById('search-picker-list');
           if (d.properties.length > 1) {
@@ -462,7 +634,11 @@
               const row = document.createElement('button');
               row.className = 'w-full flex items-center justify-between px-3 py-2 text-left hover:bg-slate-800/60 text-xs border-t border-slate-800/60';
               row.innerHTML = `<span class="font-data text-slate-300">${prop.uprn}</span><span class="px-2 py-0.5 rounded text-[9px] font-bold ${ragClass(prop.rag_status)}">${prop.rag_status}</span>`;
-              row.addEventListener('click', () => { selectProperty(prop.uprn); picker.classList.add('hidden'); });
+              row.addEventListener('click', () => { 
+                selectProperty(prop.uprn); 
+                picker.classList.add('hidden'); 
+                document.getElementById('postcode-input').blur(); 
+              });
               pickerList.appendChild(row);
             });
             picker.classList.remove('hidden');
@@ -470,13 +646,10 @@
             picker.classList.add('hidden');
           }
 
-          // Still show the first match in the sidebar immediately so there's
-          // something to look at without forcing a click first.
           selectProperty(d.properties[0]?.uprn);
         })
         .catch(err => {
-          console.error('[search] fetch/processing failed:', err);
-          showStatus(err?.message || 'Search failed — is the backend running on port 5000?', true);
+          showStatus('Search failed — is the backend running?', true);
         });
     });
 
@@ -487,19 +660,58 @@
       }
     });
 
-    // ---------- SELECT PROPERTY (map click or table row) ----------
-    map.on('click', 'parcels-fill', (e) => selectProperty(e.features[0].properties.uprn));
+    map.on('click', 'parcels-fill', (e) => {
+      e.originalEvent.stopPropagation(); 
+      selectProperty(e.features[0].properties.uprn);
+    });
+
+    // [UX] Hover feedback — cursor + subtle opacity boost via feature-state,
+    // same pattern already used for RAG repainting, so this is free of any
+    // extra fetch or setData cost.
+    let hoveredParcelId = null;
+    map.on('mousemove', 'parcels-fill', (e) => {
+      if (!e.features.length) return;
+      const id = e.features[0].id;
+      if (id === undefined || id === null || id === hoveredParcelId) return;
+      if (hoveredParcelId !== null) {
+        map.setFeatureState({ source: 'parcels', id: hoveredParcelId }, { hover: false });
+      }
+      hoveredParcelId = id;
+      map.setFeatureState({ source: 'parcels', id }, { hover: true });
+      map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'parcels-fill', () => {
+      if (hoveredParcelId !== null) {
+        map.setFeatureState({ source: 'parcels', id: hoveredParcelId }, { hover: false });
+        hoveredParcelId = null;
+      }
+      map.getCanvas().style.cursor = '';
+    });
+
+    map.on('click', (e) => {
+      const features = map.queryRenderedFeatures(e.point, { layers: ['parcels-fill'] });
+      if (!features.length) {
+        activeProperty = null;
+        document.getElementById('welcome-panel').classList.remove('hidden');
+        document.getElementById('data-content').classList.add('hidden');
+        document.getElementById('btn-print').disabled = true;
+        document.getElementById('btn-site-assembly').classList.add('hidden');
+        document.getElementById('active-uprn').innerText = 'No Asset Selected';
+        document.getElementById('cpsi-badge').innerText = 'N/A';
+        document.getElementById('cpsi-badge').className = 'text-xs font-bold text-slate-500 font-data';
+        updateCpsiGauge(null, null);
+        if (map.getSource('selected')) map.getSource('selected').setData({ type: 'FeatureCollection', features: [] });
+      }
+    });
 
     function selectProperty(uprn) {
       switchDock('map');
       document.getElementById('active-uprn').innerText = `UPRN: ${uprn}`;
-      document.getElementById('cpsi-badge').classList.add('animate-pulse'); // loading feedback — a slow response now looks intentional, not broken
+      document.getElementById('cpsi-badge').classList.add('animate-pulse');
       highlightSelected(uprn);
       fetchReport(uprn);
     }
 
-    // Outlines whichever parcel is currently loaded in the sidebar, so it's
-    // visually obvious what you're looking at on a map full of similar shapes.
     function highlightSelected(uprn) {
       if (!map.getSource('selected')) return;
       const match = lastParcelFeatures.find(f => f.properties.uprn === uprn);
@@ -509,17 +721,11 @@
     function fetchReport(uprn) {
       const thisRequest = ++reportRequestId;
 
-      fetch(`http://127.0.0.1:5000/api/property/report/${uprn}?${weightQueryString()}`)
-        .then(r => {
-          if (!r.ok) throw new Error(`Server responded ${r.status}`);
-          return r.json();
-        })
+      fetch(`/api/property/report/${uprn}?${weightQueryString()}`)
+        .then(r => r.json())
         .then(d => {
           document.getElementById('cpsi-badge').classList.remove('animate-pulse');
-          if (thisRequest !== reportRequestId) {
-            console.debug('[report] discarding stale response for request', thisRequest);
-            return;
-          }
+          if (thisRequest !== reportRequestId) return;
           activeProperty = d.report;
           document.getElementById('welcome-panel').classList.add('hidden');
           document.getElementById('data-content').classList.remove('hidden');
@@ -538,13 +744,12 @@
         .catch(err => {
           document.getElementById('cpsi-badge').classList.remove('animate-pulse');
           if (thisRequest !== reportRequestId) return;
-          console.error('Report fetch failed:', err);
           showStatus('Could not load property report — is the backend running?', true);
         });
     }
 
     function triggerSiteAssembly(inspireid) {
-      fetch(`http://127.0.0.1:5000/api/site-assembly/${inspireid}`)
+      fetch(`/api/site-assembly/${inspireid}`)
         .then(r => r.json())
         .then(d => {
           if (d.features) {
@@ -555,42 +760,62 @@
           }
         })
         .catch(err => {
-          console.error('Site assembly failed:', err);
           showStatus('Site assembly scan failed — is the backend running?', true);
         });
+    }
+
+    const CPSI_GAUGE_CIRCUMFERENCE = 69.1; // 2 * PI * r(11), matches the SVG above
+
+    function updateCpsiGauge(score, rag) {
+      const arc = document.getElementById('cpsi-gauge-arc');
+      if (!arc) return;
+      const hasScore = score !== null && score !== undefined && !Number.isNaN(score);
+      const ratio = hasScore ? Math.max(0, Math.min(1, score)) : 0;
+      arc.style.strokeDashoffset = hasScore ? String(CPSI_GAUGE_CIRCUMFERENCE * (1 - ratio)) : String(CPSI_GAUGE_CIRCUMFERENCE);
+      arc.style.stroke = !hasScore ? '#64748b' : rag === 'RED' ? '#ef4444' : rag === 'AMBER' ? '#f59e0b' : '#10b981';
     }
 
     function updateUI(p) {
       const badge = document.getElementById('cpsi-badge');
       badge.innerText = (p?.cpsi_score !== null && p?.cpsi_score !== undefined) ? parseFloat(p.cpsi_score).toFixed(2) : 'N/A';
-      badge.className = `text-xs font-bold rounded-xl px-3 py-1.5 shadow-inner font-data ${p?.rag_status === "GREEN" ? "text-emerald-400 bg-emerald-950/30 border border-emerald-900/50" : p?.rag_status === "AMBER" ? "text-amber-400 bg-amber-950/30 border border-amber-900/50" : "text-red-500 bg-red-950/40 border border-red-900/50"}`;
+      badge.className = `text-xs font-bold font-data ${p?.rag_status === "GREEN" ? "text-emerald-400" : p?.rag_status === "AMBER" ? "text-amber-400" : "text-red-500"}`;
+      updateCpsiGauge(p?.cpsi_score, p?.rag_status);
 
       const t1 = p?.tiers?.tier_1_structural;
-      document.getElementById('t1-era').innerText = t1?.building_era || 'Not sourced';
+      const eraEl = document.getElementById('t1-era');
+      eraEl.innerText = t1?.building_era || 'Not sourced';
+      eraEl.classList.toggle('value-unsourced', !t1?.building_era || t1.building_era === 'Not sourced');
       document.getElementById('t1-epc').innerText = `${t1?.epc_rating || '—'} → ${t1?.potential_epc_rating || '—'}`;
       document.getElementById('t1-notes').innerText = t1?.notes || '';
 
+      // [FIX] Tri-state badge — "NOT VERIFIED" (data.is_verified === false)
+      // now gets a neutral grey badge instead of silently falling into the
+      // green "low risk" styling it used to inherit from `is_high_risk`
+      // being falsy for both "confirmed clear" and "never checked".
       const t2 = p?.tiers?.tier_2_environmental;
       document.getElementById('t2-notes').innerText = t2?.notes || 'Data unavailable.';
       const t2Badge = document.getElementById('t2-badge');
       t2Badge.innerText = t2?.status_label || 'Pending';
-      if (t2?.is_high_risk) {
-          t2Badge.className = "text-[8px] font-bold uppercase tracking-wider bg-red-950/40 text-red-500 border border-red-800/50 px-1.5 py-0.5 rounded shrink-0 ml-2";
-      } else {
-          t2Badge.className = "text-[8px] font-bold uppercase tracking-wider bg-emerald-950/40 text-emerald-500 border border-emerald-800/50 px-1.5 py-0.5 rounded shrink-0 ml-2";
-      }
+      t2Badge.className = "text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0 ml-2 " + (
+        t2?.is_verified === false ? "badge-pending"
+        : t2?.is_high_risk ? "bg-red-950/40 text-red-500 border border-red-800/50"
+        : "bg-emerald-950/40 text-emerald-500 border border-emerald-800/50"
+      );
 
       const t3 = p?.tiers?.tier_3_legal;
-      document.getElementById('t3-tenure').innerText = t3?.tenure || 'Not sourced';
+      const tenureEl = document.getElementById('t3-tenure');
+      tenureEl.innerText = t3?.tenure || 'Not sourced';
+      tenureEl.classList.toggle('value-unsourced', !t3?.tenure || t3.tenure === 'Not sourced');
       document.getElementById('t3-inspireid').innerText = p?.inspireid ?? 'Unmatched';
+      const t3StatusColor = t3?.is_verified === false ? 'text-slate-400' : t3?.has_covenant ? 'text-red-400' : 'text-emerald-400';
       document.getElementById('t3-notes').innerHTML = `
-          <span class="block mb-1 font-bold ${t3?.has_covenant ? 'text-red-400' : 'text-emerald-400'}">
+          <span class="block mb-1 font-bold ${t3StatusColor}">
               ${t3?.status_label || ''}
           </span>
           ${t3?.notes || ''}
-      `;}
+      `;
+    }
 
-    // ---------- DOCK ----------
     function switchDock(mode) {
       document.querySelectorAll('.dock-btn').forEach(b => b.classList.toggle('active-dock', b.dataset.mode === mode));
       document.getElementById('panel-params').classList.toggle('hidden', mode !== 'params');
@@ -599,25 +824,42 @@
     }
     document.querySelectorAll('.dock-btn').forEach(btn => btn.addEventListener('click', () => switchDock(btn.dataset.mode)));
 
-    // ---------- DATA TABLE ----------
+    function getRagTooltip(status) {
+      if (status === 'RED') return 'RED: Critical Gate Override or High Risk (CPSI ≥ 0.75)';
+      if (status === 'AMBER') return 'AMBER: Moderate Risk / Retrofit Opportunity (CPSI 0.40 - 0.74)';
+      return 'GREEN: Low Risk / Compliant Asset (CPSI < 0.40)';
+    }
+
     function ragClass(status) {
       return status === 'RED' ? 'bg-red-950/50 text-red-400' : status === 'AMBER' ? 'bg-amber-950/50 text-amber-400' : 'bg-emerald-950/50 text-emerald-400';
     }
+
     function renderDataTable() {
       const tbody = document.getElementById('data-table-body');
       tbody.innerHTML = '';
+      
+      const uniqueParcels = [];
+      const seenInspireIds = new Set();
+
       lastParcelFeatures.forEach(f => {
+        const inspireId = f.properties.inspireid;
+        if (f.geometry && (!inspireId || !seenInspireIds.has(inspireId))) {
+          if (inspireId) seenInspireIds.add(inspireId);
+          uniqueParcels.push(f);
+        }
+      });
+
+      uniqueParcels.forEach(f => {
         const p = f.properties;
         const tr = document.createElement('tr');
         tr.className = 'border-b border-slate-800/60 hover:bg-slate-800/40 cursor-pointer text-xs';
-        tr.innerHTML = `<td class="px-3 py-2 font-data">${p.uprn}</td><td class="px-3 py-2 font-data text-slate-500">${p.inspireid ?? '—'}</td><td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-[10px] font-bold ${ragClass(p.rag_status)}">${p.rag_status}</span></td>`;
+        tr.innerHTML = `<td class="px-3 py-2 font-data">${p.uprn}</td><td class="px-3 py-2 font-data text-slate-500">${p.inspireid ?? '—'}</td><td class="px-3 py-2"><span title="${getRagTooltip(p.rag_status)}" class="px-2 py-0.5 rounded text-[10px] font-bold ${ragClass(p.rag_status)}">${p.rag_status}</span></td>`;
         tr.addEventListener('click', () => selectProperty(p.uprn));
         tbody.appendChild(tr);
       });
-      document.getElementById('data-table-count').innerText = `${lastParcelFeatures.length} parcels in current view`;
-    }
 
-    // ---------- SIDEBAR TABS ----------
+      document.getElementById('data-table-count').innerText = `${uniqueParcels.length} distinct land parcels (${lastParcelFeatures.length} properties) in view`;
+    }
     document.querySelectorAll('.sidebar-tab').forEach(tab => {
       tab.addEventListener('click', () => {
         document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('tab-active'));
@@ -629,10 +871,9 @@
       });
     });
 
-    // ---------- EXECUTIVE RISK ASSESSMENT (real bbox aggregation) ----------
     function fetchBboxStats() {
       const b = map.getBounds();
-      const url = `http://127.0.0.1:5000/api/spatial/stats?bounds=${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}&${weightQueryString()}`;
+      const url = `/api/spatial/stats?bounds=${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}&${weightQueryString()}`;
       document.getElementById('exec-content').classList.add('hidden');
       document.getElementById('exec-empty').classList.add('hidden');
       document.getElementById('exec-loading').classList.remove('hidden');
@@ -663,93 +904,172 @@
       document.getElementById('exec-q3-fh-val').innerText = fh !== null ? `${fh.toFixed(2)} (n=${s.tenure_compliance_comparison.freehold_count})` : 'No data';
     }
 
-    // ---------- SIDEBAR COLLAPSE ----------
     let sidebarCollapsed = false;
     document.getElementById('btn-collapse').addEventListener('click', () => {
       sidebarCollapsed = !sidebarCollapsed;
       document.getElementById('sidebar').style.width = sidebarCollapsed ? '0px' : '24rem';
       document.getElementById('sidebar-inner').classList.toggle('hidden', sidebarCollapsed);
       document.getElementById('collapse-icon').className = sidebarCollapsed ? 'fa-solid fa-chevron-left' : 'fa-solid fa-chevron-right';
-      // Mapbox's WebGL canvas doesn't auto-resize when its container's CSS
-      // width changes — without this the map stays clipped/misaligned to its
-      // old dimensions after the sidebar opens or closes.
       setTimeout(() => map.resize(), 200);
     });
 
-    // ---------- AUDIT REPORT ----------
+    // ---------- ENHANCED AUDIT REPORT GENERATOR ----------
     document.getElementById('btn-print').addEventListener('click', () => {
       const p = activeProperty;
-      console.log('[report] activeProperty at click time:', p);
-      if (!p) { console.warn('[report] no property selected, aborting'); showStatus('Select a property first.', true); return; }
+      if (!p) { showStatus('Select a property first.', true); return; }
 
-      const pw = window.open('', '_blank', 'width=850,height=1000');
-      if (!pw) { console.error('[report] window.open returned null — popup likely blocked'); showStatus('Popup blocked — allow popups for this site to generate the report.', true); return; }
+      const pw = window.open('', '_blank', 'width=900,height=1100');
+      if (!pw) { showStatus('Popup blocked — allow popups for this site to generate the report.', true); return; }
 
       const t1 = p?.tiers?.tier_1_structural;
       const t2 = p?.tiers?.tier_2_environmental;
       const t3 = p?.tiers?.tier_3_legal;
+      
       const ragColor = p?.rag_status === 'RED' ? '#dc2626' : p?.rag_status === 'AMBER' ? '#d97706' : '#059669';
-      const t2BadgeColor = t2?.is_high_risk ? '#991b1b' : '#166534';
-      const t2BadgeBg = t2?.is_high_risk ? '#fef2f2' : '#f0fdf4';
-      const t3BadgeColor = t3?.has_covenant ? '#991b1b' : '#166534';
-      const t3BadgeBg = t3?.has_covenant ? '#fef2f2' : '#f0fdf4';
+      const ragBg = p?.rag_status === 'RED' ? '#fef2f2' : p?.rag_status === 'AMBER' ? '#fffbeb' : '#f0fdf4';
+      
+      let actionText = "";
+      if (p?.rag_status === 'RED') {
+        actionText = "CRITICAL IMPEDIMENT DETECTED. Immediate legal or structural remediation required. Asset fails Stage 1 gate parameters or presents high Whole Life Cycle (WLC) friction. Not recommended for automated acquisition without manual title clearance.";
+      } else if (p?.rag_status === 'AMBER') {
+        actionText = "MODERATE RISK / RETROFIT OPPORTUNITY. Asset exhibits manageable headroom or tenure restrictions. Suitable for value-add strategy (e.g. EPC thermal upgrade from E/F/G to B/C). Proceed subject to standard desktop due diligence.";
+      } else {
+        // [FIX] A GREEN score means the WLC numbers came out low risk — it
+        // does NOT by itself mean title was checked. Only say "clear title"
+        // when tier_3_legal actually reports a verified result; otherwise
+        // say what's true: the score is low risk, but title still needs
+        // checking before this reads as an all-clear.
+        const titleVerified = t3?.is_verified !== false;
+        actionText = titleVerified
+          ? "LOW RISK / COMPLIANT ASSET. Clear title, favorable tenure structure, and acceptable energy profile detected. Approved for fast-track portfolio aggregation or institutional acquisition."
+          : "LOW RISK ON SCORED FACTORS. Energy and structural profile score low risk, but Land Registry title/covenant data has not been sourced for this asset — confirm title status manually before treating this as a compliant asset.";
+      }
+
+      // [FIX] Build the provenance line from what was actually available for
+      // THIS property, instead of a static sentence that claimed every
+      // registry was checked on every report regardless of data gaps.
+      const provenanceRegistries = [];
+      if (t1?.epc_rating) provenanceRegistries.push('DLUHC EPC Register (2026)');
+      if (t2?.is_verified) provenanceRegistries.push('Environment Agency Flood Map for Planning');
+      if (t3?.is_verified) provenanceRegistries.push('HM Land Registry Title Registers');
+      if (p?.inspireid) provenanceRegistries.push('Ordnance Survey MasterMap Highways');
+      const provenanceText = provenanceRegistries.length
+        ? `Verified against ${provenanceRegistries.join(', ')}. Fields marked "Not sourced" / "NOT VERIFIED" above were not covered by this check.`
+        : 'No registry lineage could be verified for this asset from currently sourced data — desktop assessment only.';
+
       const html = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>LegacyTrace Audit — ${p?.uprn ?? '—'}</title>
+<title>LegacyTrace Audit — UPRN ${p?.uprn ?? '—'}</title>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; color: #0f172a; padding: 48px; max-width: 800px; margin: 0 auto; }
-  .header { border-bottom: 4px solid #0f172a; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-end; }
-  .title { font-size: 22px; font-weight: 900; margin: 0; }
-  .meta { font-size: 11px; color: #64748b; font-family: monospace; margin-top: 4px; }
-  .score { font-size: 36px; font-weight: 900; text-align: right; margin: 0; color: ${ragColor}; }
-  .score-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #64748b; text-align: right; margin: 0; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; margin: 24px 0 4px; display: flex; align-items: center; gap: 8px; }
-  .badge { font-size: 9px; background: #78350f33; color: #b45309; padding: 2px 7px; border-radius: 4px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
-  p.body-text { font-size: 14px; margin: 4px 0; }
-  p.note { font-size: 11px; color: #64748b; margin: 4px 0; }
-  .lineage { font-size: 11px; font-family: monospace; color: #64748b; }
-  .sign { margin-top: 64px; padding-top: 16px; border-top: 1px solid #cbd5e1; display: flex; justify-content: space-between; font-size: 11px; color: #64748b; }
-  .print-btn { margin-top: 40px; background: #0f172a; color: white; padding: 10px 20px; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a; padding: 40px; max-width: 850px; margin: 0 auto; line-height: 1.4; }
+  
+  .header { border-bottom: 3px solid #0f172a; padding-bottom: 12px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .brand { font-size: 20px; font-weight: 900; letter-spacing: -0.02em; margin: 0; color: #0f172a; }
+  .brand span { color: #2563eb; }
+  .doc-title { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748b; letter-spacing: 0.05em; margin: 2px 0 0 0; }
+  .meta { font-size: 10px; color: #64748b; font-family: monospace; margin-top: 4px; }
+  
+  .score-card { background: ${ragBg}; border: 2px solid ${ragColor}; padding: 10px 16px; border-radius: 8px; text-align: right; }
+  .score-val { font-size: 32px; font-weight: 900; margin: 0; color: ${ragColor}; font-family: monospace; line-height: 1; }
+  .score-label { font-size: 9px; text-transform: uppercase; font-weight: 800; letter-spacing: .08em; color: ${ragColor}; margin-top: 4px; }
+
+  .section-title { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: #334155; margin: 18px 0 8px; border-left: 3px solid #2563eb; padding-left: 8px; }
+  
+  .audit-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 12px; }
+  .audit-table th { background: #f8fafc; border: 1px solid #e2e8f0; padding: 6px 10px; text-align: left; font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 700; }
+  .audit-table td { border: 1px solid #e2e8f0; padding: 8px 10px; color: #1e293b; }
+  
+  .badge { display: inline-block; font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
+  .badge-red { background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5; }
+  .badge-green { background: #f0fdf4; color: #166534; border: 1px solid #86efac; }
+  
+  .callout { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; margin: 12px 0; font-size: 11px; }
+  .callout-title { font-weight: 800; text-transform: uppercase; font-size: 9px; color: #475569; margin-bottom: 4px; }
+  
+  .lineage { font-size: 10px; font-family: monospace; color: #64748b; background: #f1f5f9; padding: 8px; border-radius: 4px; }
+  
+  .sign-block { margin-top: 40px; padding-top: 16px; border-top: 1px solid #cbd5e1; display: flex; justify-content: space-between; font-size: 10px; color: #64748b; }
+  
+  .print-btn { margin-top: 24px; background: #0f172a; color: white; padding: 8px 18px; border: none; border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .badge-pending { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
   @media print { .print-btn { display: none; } }
 </style>
 </head>
 <body>
   <div class="header">
     <div>
-      <p class="title">LegacyTrace UK — In-Depth Audit Report</p>
-      <p class="meta">UPRN ${p?.uprn ?? '—'} · Postcode ${p?.postcode ?? '—'} · Generated ${new Date().toLocaleString('en-GB')}</p>
+      <p class="brand">LegacyTrace <span>UK</span></p>
+      <p class="doc-title">Spatial Decision Support System — In-Depth Property Audit</p>
+      <p class="meta">UPRN: ${p?.uprn ?? '—'} · INSPIRE ID: ${p?.inspireid ?? 'Unmatched'} · Postcode: ${p?.postcode ?? '—'}</p>
+      <p class="meta">Generated: ${new Date().toLocaleString('en-GB')}</p>
     </div>
-    <div>
-      <p class="score">${p?.cpsi_score ?? '—'}</p>
-      <p class="score-label">${p?.rag_status ?? '—'} · CPSI Composite</p>
+    <div class="score-card">
+      <p class="score-val">${p?.cpsi_score !== null ? parseFloat(p.cpsi_score).toFixed(2) : '—'}</p>
+      <p class="score-label">${p?.rag_status ?? '—'} · CPSI Score</p>
     </div>
   </div>
 
-  <h2>Tier 1 — Structural &amp; Energy Performance</h2>
-  <p class="body-text">Building era: <strong>${t1?.building_era ?? 'Not sourced'}</strong> · EPC: <strong>${t1?.epc_rating ?? '—'}</strong> &rarr; Potential: <strong>${t1?.potential_epc_rating ?? '—'}</strong></p>
-  <p class="note">${t1?.notes ?? ''}</p>
-
-  <!-- WITH THIS -->
-  <h2>Tier 2 — Spatial &amp; Environmental Hazards <span class="badge" style="background:${t2BadgeBg}; color:${t2BadgeColor}; border: 1px solid ${t2BadgeColor};">${t2?.status_label ?? 'Pending'}</span></h2>
-  <p class="body-text">${t2?.notes ?? 'Environmental hazard data not yet integrated.'}</p>
-
-  <h2>Tier 3 — Legal &amp; Tenure Restrictions <span class="badge" style="background:${t3BadgeBg}; color:${t3BadgeColor}; border: 1px solid ${t3BadgeColor};">${t3?.status_label ?? 'Pending'}</span></h2>
-  <p class="body-text">Tenure: <strong>${t3?.tenure ?? 'Not sourced'}</strong> · Inspire ID: <strong style="font-family:monospace;">${p?.inspireid ?? 'Unmatched'}</strong></p>
-  <p class="note">${t3?.notes ?? ''}</p>
-
-  <h2>Registry Lineage</h2>
-  <p class="lineage">HM Land Registry &middot; EPC Register &middot; OS MasterMap &middot; EA Flood Data — verify against live registries via the linked badges in-app.</p>
-
-  <div class="sign">
-    <div>Reviewed by: _____________________</div>
-    <div>Signature: _____________________</div>
-    <div>Date: _____________________</div>
+  <div class="callout">
+    <div class="callout-title">Methodology &amp; Definition</div>
+    <strong>Composite Property Suitability Index (CPSI):</strong> Evaluates spatial assets through a two-stage matrix. <em>Stage 1</em> enforces strict legal &amp; environmental gates (Flood Zone 3, Restrictive Covenants). <em>Stage 2</em> applies compensatory Whole Life Cycle (WLC) weighting across Legal, Environmental, and Economic dimensions.
   </div>
 
-  <button class="print-btn" onclick="window.print()">Print</button>
+  <div class="section-title">Tier 1 — Structural &amp; Energy Performance</div>
+  <table class="audit-table">
+    <tr>
+      <th>Dominant Building Era</th>
+      <th>Current EPC Rating</th>
+      <th>Potential EPC Rating</th>
+      <th>Improvement Headroom</th>
+    </tr>
+    <tr>
+      <td><strong>${t1?.building_era ?? 'Not sourced'}</strong></td>
+      <td><strong>${t1?.epc_rating ?? '—'}</strong></td>
+      <td><strong>${t1?.potential_epc_rating ?? '—'}</strong></td>
+      <td>${t1?.epc_improvement_bands ? t1.epc_improvement_bands + ' Band(s)' : 'None calculated'}</td>
+    </tr>
+  </table>
+  <p style="font-size: 11px; color: #475569; margin-top: -6px;">${t1?.notes ?? ''}</p>
+
+  <div class="section-title">Tier 2 &amp; Tier 3 — Legal, Environmental &amp; Tenure Assessment</div>
+  <table class="audit-table">
+    <tr>
+      <th>Dimension</th>
+      <th>Status / Class</th>
+      <th>Details &amp; Restrictions</th>
+    </tr>
+    <tr>
+      <td><strong>Environmental Hazards</strong></td>
+      <td><span class="badge ${t2?.is_verified === false ? 'badge-pending' : t2?.is_high_risk ? 'badge-red' : 'badge-green'}">${t2?.status_label ?? 'NOT VERIFIED'}</span></td>
+      <td>${t2?.notes ?? 'No data.'}</td>
+    </tr>
+    <tr>
+      <td><strong>Tenure &amp; Legal Title</strong></td>
+      <td><strong>${t3?.tenure ?? 'Not sourced'}</strong></td>
+      <td><span class="badge ${t3?.is_verified === false ? 'badge-pending' : t3?.has_covenant ? 'badge-red' : 'badge-green'}">${t3?.status_label ?? 'NOT VERIFIED'}</span> — ${t3?.notes ?? ''}</td>
+    </tr>
+  </table>
+
+  <div class="callout" style="border-left: 4px solid ${ragColor};">
+    <div class="callout-title" style="color:${ragColor};">Investment Implication &amp; Next Steps</div>
+    ${actionText}
+  </div>
+
+  <div class="section-title">Data Provenance &amp; Registry Lineage</div>
+  <p class="lineage">
+    ${provenanceText}
+  </p>
+
+  <div class="sign-block">
+    <div>Audited By: ___________________________</div>
+    <div>Signature: ___________________________</div>
+    <div>Date: _______________</div>
+  </div>
+
+  <button class="print-btn" onclick="window.print()">Print Audit PDF</button>
 
   <script>
     window.onload = () => { window.print(); };
@@ -757,17 +1077,11 @@
 </body>
 </html>`;
 
-      try {
-        pw.document.open();
-        pw.document.write(html);
-        pw.document.close();
-        console.log('[report] document written and closed successfully');
-      } catch (err) {
-        console.error('[report] failed to write report document:', err);
-        showStatus('Report generation failed — check console for details.', true);
-      }
+      pw.document.open();
+      pw.document.write(html);
+      pw.document.close();
     });
-  }); // end DOMContentLoaded
+  });
   </script>
 </body>
 </html>
