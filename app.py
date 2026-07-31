@@ -17,10 +17,8 @@ from geoalchemy2.functions import (
     ST_SetSRID,
     ST_MakePoint,
     ST_Centroid,
-    # [UPDATED] Replaced ST_Simplify with ST_SimplifyPreserveTopology to prevent invalid geometries
     ST_SimplifyPreserveTopology 
 )
-# [PERF] ST_Distance dropped — bbox_diagonal_metres no longer round-trips the DB (see below).
 
 load_dotenv()
 app = Flask(__name__)
@@ -56,12 +54,6 @@ class BirminghamProperty(db.Model):
     dominant_building_era = db.Column(db.String(5))
     potential_epc_rating = db.Column(db.String(2))
     tenure = db.Column(db.String(2))
-    # [FIX] No default=False — a row that has never had this field checked
-    # must be able to store NULL. Silently defaulting an unsourced field to
-    # False makes "we never checked" and "we checked and it's clear" render
-    # identically downstream (sidebar, PDF), which is a false-assurance bug,
-    # not a cosmetic one. NULL now means "not yet sourced"; True/False mean
-    # an actual verified result.
     has_recorded_covenant = db.Column(db.Boolean, nullable=True)
     in_flood_zone_3 = db.Column(db.Boolean, nullable=True)
 
@@ -86,98 +78,46 @@ def parse_weights(args):
         return 0.4, 0.3, 0.3
     return legal_weight / total, env_weight / total, econ_weight / total
 
-
 # --- BBOX LIMIT CALCULATION ---
 BBOX_LIMIT_METRES = 5000
 _EARTH_RADIUS_METRES = 6371000.0
 
 def bbox_diagonal_metres(w, s, e, n):
-    """Great-circle diagonal of the viewport.
-
-    [PERF] This used to be a round-trip to Postgres (ST_Distance on two
-    ST_MakePoint/geography casts) on every single /parcels and /stats
-    request. That's a full network+planner+executor round trip just to
-    evaluate a haversine formula on four floats already sitting in memory.
-    Computing it in Python removes that round trip entirely — worth doing
-    even before anything else, since it's on the hot path of *every*
-    pan/zoom event.
-    """
     lat1, lat2 = math.radians(s), math.radians(n)
     dlat = math.radians(n - s)
     dlng = math.radians(e - w)
     a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
-    a = min(1.0, max(0.0, a))  # guard against float rounding pushing a fractionally out of [0,1]
+    a = min(1.0, max(0.0, a))
     return 2 * _EARTH_RADIUS_METRES * math.asin(math.sqrt(a))
 
-
 def simplify_profile_for_zoom(zoom):
-    """Zoom-adaptive (tolerance_degrees, geojson_coordinate_precision).
-
-    [PERF] A single fixed 0.00001 simplify tolerance and Postgres's default
-    9-decimal-place GeoJSON precision were being used at every zoom level.
-    At low zoom (zoomed-out, wide viewport) that's massive over-precision —
-    9 decimal places of a WGS84 degree is sub-millimetre, transmitted for
-    every vertex of every polygon, for boundaries the user can't
-    perceptually distinguish at that scale. Coarsening both simplification
-    and coordinate precision at low zoom cuts payload size and
-    ST_SimplifyPreserveTopology CPU cost substantially, while full fidelity
-    is preserved once the user is zoomed in enough to actually see parcel
-    boundaries clearly.
-    """
     try:
         zoom = float(zoom)
     except (TypeError, ValueError):
         zoom = 13.0
     if zoom < 14:
-        return 0.00015, 5   # ~15m tolerance, ~1.1m coordinate precision
+        return 0.00015, 5
     elif zoom < 16:
-        return 0.00003, 6   # ~3m tolerance, ~11cm coordinate precision
+        return 0.00003, 6
     else:
-        return 0.000005, 7  # ~0.5m tolerance, near-full topology fidelity
+        return 0.000005, 7
 
-
-# --- [UPDATED] VOA ERA DICTIONARY MAPPING ---
-# Cleaned up to reflect the exact date ranges from the VOA source dataset
 era_map = {
-    'A': 'Pre-1900', 
-    'B': '1900-1918', 
-    'C': '1919-1929',
-    'D': '1930-1939', 
-    'E': '1945-1954', 
-    'F': '1955-1964',
-    'G': '1965-1972', 
-    'H': '1973-1982', 
-    'I': '1983-1992',
-    'J': '1993-1999', 
-    'K': '2000-2008', 
-    'L': '2009-2021'
+    'A': 'Pre-1900', 'B': '1900-1918', 'C': '1919-1929', 'D': '1930-1939',
+    'E': '1945-1954', 'F': '1955-1964', 'G': '1965-1972', 'H': '1973-1982',
+    'I': '1983-1992', 'J': '1993-1999', 'K': '2000-2008', 'L': '2009-2021'
 }
 
 # --- CPSI SCORING ENGINE ---
 def calculate_cpsi_score(prop, legal_weight=0.4, env_weight=0.3, econ_weight=0.3):
-    """Executes the two-stage hybrid MCDA framework to compute property risk."""
+    """Executes two-stage hybrid MCDA and returns score along with full math breakdown."""
     
-    # STAGE 1 (Non-Compensatory Gates): Instant overrides for critical hazards.
-    # These columns are now nullable (None = not sourced). None is falsy in
-    # Python, so an unsourced parcel correctly does NOT trigger a RED override
-    # here — it just isn't scored as risky by the *number*. The report-facing
-    # tri-state labelling below is what stops it from being described as
-    # "clear" in the PDF/sidebar copy, which is a separate concern from the
-    # numeric score.
-    if getattr(prop, 'has_recorded_covenant', False):
-        return 1.00, "RED", "CRITICAL OVERRIDE: Active restrictive covenant detected on Land Registry title."
-    
-    if getattr(prop, 'in_flood_zone_3', False):
-        return 1.00, "RED", "CRITICAL OVERRIDE: Property intersects EA Flood Zone 3 (High Risk)."
-
-    # STAGE 2 (Compensatory Weights): Base normalization mappings
+    # Base sub-scores calculation (Defaults to 0.0 if missing, so unsourced data adds +0.00 risk)
     epc_map = {'A': 0.0, 'B': 0.1, 'C': 0.3, 'D': 0.5, 'E': 0.7, 'F': 0.9, 'G': 1.0}
-    env_sub_score = epc_map.get((prop.epc_rating or '').upper(), 0.5)
+    env_sub_score = epc_map.get((prop.epc_rating or '').upper(), 0.0) if prop.epc_rating else 0.0
 
-    # [UPDATED] Removed dead string checks, aligned with single-char VOA dict
     era_code = (prop.dominant_building_era or '').upper().strip()
-    era_score = 0.2  # Default base score if unknown
-    
+    era_score = 0.0
     if era_code == 'A':
         era_score = 1.00
     elif era_code in ['B', 'C', 'D']:
@@ -190,28 +130,57 @@ def calculate_cpsi_score(prop, legal_weight=0.4, env_weight=0.3, econ_weight=0.3
         era_score = 0.00
 
     econ_sub_score = min(era_score, 1.0)
-    
-    # Legal sub-score adds fractional risk to leaseholds
-    legal_sub_score = 0.4 if prop.tenure == 'LH' else 0.1
+    legal_sub_score = 0.4 if prop.tenure == 'LH' else (0.1 if prop.tenure else 0.0)
 
-    # WLC Algebra & RAG Status Compilation
-    composite_risk = (legal_weight * legal_sub_score) + (env_weight * env_sub_score) + (econ_weight * econ_sub_score)
-    composite_risk = round(max(0.0, min(composite_risk, 1.0)), 3)
+    # Stage 2 Weighted Contributions
+    legal_contrib = round(legal_sub_score * legal_weight, 3)
+    env_contrib = round(env_sub_score * env_weight, 3)
+    econ_contrib = round(econ_sub_score * econ_weight, 3)
+    uncapped_sum = round(legal_contrib + env_contrib + econ_contrib, 3)
 
-    if composite_risk >= 0.75:
+    # STAGE 1 (Non-Compensatory Gates) Check
+    is_override = False
+    if getattr(prop, 'has_recorded_covenant', False) or getattr(prop, 'in_flood_zone_3', False):
+        composite_risk = 1.00
         rag = "RED"
-    elif composite_risk >= 0.40:
-        rag = "AMBER"
+        is_override = True
+        notes = "CRITICAL OVERRIDE: Non-compensatory hazard detected."
     else:
-        rag = "GREEN"
+        composite_risk = max(0.0, min(uncapped_sum, 1.0))
+        if composite_risk >= 0.75:
+            rag = "RED"
+        elif composite_risk >= 0.40:
+            rag = "AMBER"
+        else:
+            rag = "GREEN"
+        notes = "Index metrics derived via standard compensatory WLC matrix models."
 
-    return composite_risk, rag, "Index metrics derived via standard compensatory WLC matrix models."
+    breakdown = {
+        "weights_used": {
+            "legal": legal_weight,
+            "env": env_weight,
+            "econ": econ_weight
+        },
+        "sub_scores": {
+            "legal": legal_sub_score,
+            "env": env_sub_score,
+            "econ": econ_sub_score
+        },
+        "contributions": {
+            "legal": legal_contrib,
+            "env": env_contrib,
+            "econ": econ_contrib
+        },
+        "uncapped_sum": uncapped_sum,
+        "final_cpsi": composite_risk,
+        "is_override": is_override
+    }
 
+    return composite_risk, rag, notes, breakdown
 
 # --- ROUTE 1: POSTCODE SEARCH ---
 @app.route('/api/properties/<postcode>', methods=['GET'])
 def get_properties_by_postcode(postcode):
-    """Normalized text search resolving to spatial features."""
     clean_postcode = postcode.upper().replace("-", "").replace(" ", "").strip()
 
     query = db.session.query(
@@ -230,9 +199,10 @@ def get_properties_by_postcode(postcode):
 
     results = []
     for prop, geojson in query:
-        cpsi, rag, notes = calculate_cpsi_score(prop, legal_w, env_w, econ_w)
+        cpsi, rag, notes, _ = calculate_cpsi_score(prop, legal_w, env_w, econ_w)
         results.append({
             "uprn": prop.uprn,
+            "postcode": prop.postcode,
             "epc_rating": prop.epc_rating,
             "dominant_building_era": prop.dominant_building_era,
             "tenure": prop.tenure,
@@ -245,36 +215,11 @@ def get_properties_by_postcode(postcode):
 
     return jsonify({"status": "success", "properties": results}), 200
 
-
-# --- ROUTE 2: BBOX SEARCH WITH FIXED ARBITRAGE FILTERS ---
-#
-# [PERF] This route was rewritten from the ORM version for three reasons:
-#
-# 1. The old WHERE clause did ST_Intersects(ST_Transform(geometry, 4326), bbox_4326) —
-#    transforming EVERY candidate polygon out of its native 27700 SRID before
-#    comparing it. That defeats a GiST index on the raw `geometry` column,
-#    because the index is built on 27700 coordinates, not the on-the-fly
-#    reprojected ones. Transforming the (tiny, single) *viewport* bbox into
-#    27700 instead, and comparing it directly against the untouched
-#    `geometry` column, lets Postgres use the GiST index as intended.
-#
-# 2. ST_SimplifyPreserveTopology + ST_AsGeoJSON were in the SELECT list of a
-#    query with ORDER BY + LIMIT — with the ORM building one flat SELECT,
-#    there's no boundary stopping Postgres from evaluating those (relatively
-#    expensive) functions on every row that matches the spatial filter
-#    before sorting/limiting. Structuring it as an inner query that does the
-#    filter + order + LIMIT 350 first, wrapped by an outer SELECT that only
-#    then simplifies/serializes, guarantees those functions run at most 350
-#    times per request, no matter how many thousands of parcels are in view.
-#
-# 3. Column projection — the ORM was hydrating full BirminghamProperty
-#    model instances (every column) for up to 350 rows just to read 7
-#    fields out of each. The raw query selects only what's rendered.
+# --- ROUTE 2: BBOX SEARCH ---
 @app.route('/api/spatial/parcels', methods=['GET'])
 def get_parcels_in_bbox():
-    """Live spatial intersection query serving the Mapbox GL JS frontend."""
     bounds = request.args.get('bounds')
-    arbitrage_mode = request.args.get('filter')  # 'retrofit' or 'hmo'
+    arbitrage_mode = request.args.get('filter')
     zoom = request.args.get('zoom', 13)
     include_debug = request.args.get('debug') == '1'
 
@@ -294,8 +239,6 @@ def get_parcels_in_bbox():
     center_lat = (s + n) / 2.0
     simplify_tol, geojson_precision = simplify_profile_for_zoom(zoom)
 
-    # arbitrage_mode is constrained to two known enum values above, so this
-    # is a fixed, safe SQL fragment — never built from raw user input.
     arbitrage_clause = ""
     if arbitrage_mode == 'retrofit':
         arbitrage_clause = "AND p.epc_rating IN ('E', 'F', 'G')"
@@ -317,8 +260,6 @@ def get_parcels_in_bbox():
             WHERE g.geometry IS NOT NULL
               AND ST_Intersects(g.geometry, v.bbox_bng)
               {arbitrage_clause}
-            -- Ultra-fast numeric coordinate distance directly on lat/long
-            -- columns avoids running ST_Centroid on complex geometry polygons
             ORDER BY (p.longitude - :center_lng) * (p.longitude - :center_lng)
                    + (p.latitude - :center_lat) * (p.latitude - :center_lat)
             LIMIT 350
@@ -343,10 +284,10 @@ def get_parcels_in_bbox():
 
     features = []
     for row in rows:
-        cpsi, rag, notes = calculate_cpsi_score(row, legal_w, env_w, econ_w)
+        cpsi, rag, notes, _ = calculate_cpsi_score(row, legal_w, env_w, econ_w)
         features.append({
             "type": "Feature",
-            "id": row.inspireid,  # lets Mapbox GL use setFeatureState for cheap re-styling
+            "id": row.inspireid,
             "geometry": json.loads(row.geojson),
             "properties": {
                 "uprn": row.uprn,
@@ -362,27 +303,11 @@ def get_parcels_in_bbox():
         })
 
     payload = {"type": "FeatureCollection", "features": features}
-
-    # [PERF] The old COUNT() over the full lat/long range ran on every single
-    # request just to populate a debug field never shown in the main UI.
-    # Gated behind ?debug=1 so production panning doesn't pay for it.
-    if include_debug:
-        total_in_bbox = db.session.query(BirminghamProperty).filter(
-            BirminghamProperty.longitude >= w, BirminghamProperty.longitude <= e,
-            BirminghamProperty.latitude >= s, BirminghamProperty.latitude <= n
-        ).count()
-        payload["debug"] = {
-            "properties_in_bbox_by_coordinate": total_in_bbox,
-            "properties_with_renderable_geometry": len(features)
-        }
-
     return jsonify(payload), 200
-
 
 # --- ROUTE 3: SITE ASSEMBLY ENGINE ---
 @app.route('/api/site-assembly/<int:inspireid>', methods=['GET'])
 def site_assembly(inspireid):
-    """Executes an ST_Touches spatial join to find contiguous plots."""
     try:
         target_geom = db.session.query(BirminghamGeometry.geometry).filter_by(inspireid=inspireid).subquery()
         
@@ -405,37 +330,51 @@ def site_assembly(inspireid):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
 # --- ROUTE 4: REPORT METADATA ---
 @app.route('/api/property/report/<int:uprn>', methods=['GET'])
 def get_property_report(uprn):
-    """Populates the detailed sidebar and PDF audit templates."""
     prop = BirminghamProperty.query.filter_by(uprn=uprn).first()
     if not prop:
         return jsonify({"status": "error"}), 404
 
     legal_w, env_w, econ_w = parse_weights(request.args)
-    cpsi, rag, notes = calculate_cpsi_score(prop, legal_w, env_w, econ_w)
+    cpsi, rag, notes, breakdown = calculate_cpsi_score(prop, legal_w, env_w, econ_w)
 
     epc_order = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4, 'F': 5, 'G': 6}
     current_rank = epc_order.get((prop.epc_rating or '').upper())
     potential_rank = epc_order.get((prop.potential_epc_rating or '').upper())
     epc_gap_bands = (current_rank - potential_rank) if (current_rank is not None and potential_rank is not None) else None
 
-    # [UPDATED] Uses the global era_map dictionary cleanly
     readable_era = era_map.get(prop.dominant_building_era, prop.dominant_building_era or 'Not sourced')
 
-    tier_1_structural = {
-        "building_era": readable_era,
-        "epc_rating": prop.epc_rating,
-        "potential_epc_rating": prop.potential_epc_rating,
-        "epc_improvement_bands": epc_gap_bands,
-        "notes": f"Thermal performance deficit: {epc_gap_bands} band(s) of headroom between current and potential EPC." if epc_gap_bands else "No significant thermal upgrade headroom calculated."
-    }
+    # TIER 1: LEGAL
+    covenant_flag = prop.has_recorded_covenant
+    if covenant_flag is True:
+        tier_1_legal = {
+            "tenure": "Leasehold" if prop.tenure == 'LH' else ("Freehold" if prop.tenure else "Not sourced"),
+            "has_covenant": True,
+            "is_verified": True,
+            "status_label": "RESTRICTIVE COVENANT",
+            "notes": "Active restrictive covenants recorded on Land Registry Title."
+        }
+    elif covenant_flag is False:
+        tier_1_legal = {
+            "tenure": "Leasehold" if prop.tenure == 'LH' else ("Freehold" if prop.tenure else "Not sourced"),
+            "has_covenant": False,
+            "is_verified": True,
+            "status_label": "CLEAR TITLE",
+            "notes": "No title encumbrances or recorded covenants detected."
+        }
+    else:
+        tier_1_legal = {
+            "tenure": "Leasehold" if prop.tenure == 'LH' else ("Freehold" if prop.tenure else "Not sourced"),
+            "has_covenant": False,
+            "is_verified": False,
+            "status_label": "NOT VERIFIED",
+            "notes": "Land Registry covenant data not yet sourced for this title — treat as unknown, not clear."
+        }
 
-    # [FIX] Tri-state, not boolean. `is None` means the EA flood layer was
-    # never sourced for this parcel — that must never render as "low risk",
-    # because we don't actually know that.
+    # TIER 2: ENVIRONMENTAL (Properly synced with DB flood status)
     flood_flag = prop.in_flood_zone_3
     if flood_flag is True:
         tier_2_environmental = {
@@ -443,7 +382,7 @@ def get_property_report(uprn):
             "status_label": "FLOOD ZONE 3 (HIGH RISK)",
             "is_high_risk": True,
             "is_verified": True,
-            "notes": "Property falls within EA Flood Zone 3 (high probability of river/sea flooding)."
+            "notes": "Property falls within Environment Agency Flood Zone 3 (High Risk)."
         }
     elif flood_flag is False:
         tier_2_environmental = {
@@ -459,59 +398,49 @@ def get_property_report(uprn):
             "status_label": "NOT VERIFIED",
             "is_high_risk": False,
             "is_verified": False,
-            "notes": "Environment Agency flood zone data not yet sourced for this parcel — treat as unknown, not low risk."
+            "notes": "Environment Agency flood zone data not yet sourced for this parcel."
         }
 
-    # [FIX] Same tri-state treatment for the legal title gate. `has_covenant`
-    # driving the "CLEAR TITLE" badge used to collapse NULL and False into
-    # the same "no covenant" outcome — see calculate_cpsi_score/report notes
-    # above. This is the one that produced the "CLEAR TITLE ... Verified
-    # against HM Land Registry" contradiction next to a "Not sourced" tenure
-    # field in the generated PDF.
-    covenant_flag = prop.has_recorded_covenant
-    if covenant_flag is True:
-        tier_3_legal = {
-            "tenure": "Leasehold" if prop.tenure == 'LH' else ("Freehold" if prop.tenure else "Not sourced"),
-            "has_covenant": True,
-            "is_verified": True,
-            "status_label": "RESTRICTIVE COVENANT",
-            "notes": "Active restrictive covenants recorded on Land Registry Title."
+    # TIER 3: STRUCTURAL & ENERGY PERFORMANCE
+    tier_3_structural = {
+        "building_era": readable_era,
+        "epc_rating": prop.epc_rating,
+        "potential_epc_rating": prop.potential_epc_rating,
+        "epc_improvement_bands": epc_gap_bands,
+        "notes": f"Thermal performance deficit: {epc_gap_bands} band(s) of headroom between current and potential EPC." if epc_gap_bands else "No significant thermal upgrade headroom calculated."
+    }
+
+    gate_failure = None
+    if prop.has_recorded_covenant is True:
+        gate_failure = {
+            "label": "GATE FAILURE: Legal / Restrictive Covenant",
+            "explanation": "Active covenant recorded on title. Overrides weighted sum."
         }
-    elif covenant_flag is False:
-        tier_3_legal = {
-            "tenure": "Leasehold" if prop.tenure == 'LH' else ("Freehold" if prop.tenure else "Not sourced"),
-            "has_covenant": False,
-            "is_verified": True,
-            "status_label": "CLEAR TITLE",
-            "notes": "No title encumbrances or recorded covenants detected."
-        }
-    else:
-        tier_3_legal = {
-            "tenure": "Leasehold" if prop.tenure == 'LH' else ("Freehold" if prop.tenure else "Not sourced"),
-            "has_covenant": False,
-            "is_verified": False,
-            "status_label": "NOT VERIFIED",
-            "notes": "Land Registry covenant data not yet sourced for this title — treat as unknown, not clear."
+    elif prop.in_flood_zone_3 is True:
+        gate_failure = {
+            "label": "GATE FAILURE: Environmental / Flood Zone 3",
+            "explanation": "High flood risk boundary intersection. Overrides weighted sum."
         }
 
     payload = {
         "uprn": prop.uprn,
         "inspireid": prop.inspireid,
         "postcode": prop.postcode,
-        "tenure": tier_3_legal["tenure"], 
+        "tenure": tier_1_legal["tenure"], 
         "cpsi_score": cpsi,
         "rag_status": rag,
         "system_notes": notes,
+        "gate_failure": gate_failure,
+        "score_breakdown": breakdown,
         "tiers": {
-            "tier_1_structural": tier_1_structural,
+            "tier_1_legal": tier_1_legal,
             "tier_2_environmental": tier_2_environmental,
-            "tier_3_legal": tier_3_legal
+            "tier_3_structural": tier_3_structural
         }
     }
     return jsonify({"status": "success", "report": payload}), 200
 
-
-# --- ROUTE 5: EXECUTIVE RISK ASSESSMENT ---
+# --- ROUTE 5: EXECUTIVE STATS ---
 @app.route('/api/spatial/stats', methods=['GET'])
 def get_bbox_stats():
     bounds = request.args.get('bounds')
@@ -519,20 +448,12 @@ def get_bbox_stats():
         return jsonify({"status": "error", "message": "bounds parameter required"}), 400
 
     w, s, e, n = map(float, bounds.split(','))
-
     diagonal = bbox_diagonal_metres(w, s, e, n)
     if diagonal is not None and diagonal > BBOX_LIMIT_METRES:
         return jsonify({"status": "error", "message": "Please zoom in to view parcel data."}), 400
 
-    bbox_poly = ST_MakeEnvelope(w, s, e, n, 4326)
-
     bbox_bng = func.ST_Transform(func.ST_MakeEnvelope(w, s, e, n, 4326), 27700)
 
-    # [PERF] This used to hydrate full BirminghamProperty ORM instances
-    # (every column, incl. geometry-adjacent fields) for up to 2000 rows on
-    # every executive-tab open AND every subsequent pan while that tab stays
-    # open. calculate_cpsi_score only ever touches 5 fields, so project just
-    # those instead of paying for a full row hydration each time.
     props_in_view = db.session.query(
         BirminghamProperty.epc_rating,
         BirminghamProperty.dominant_building_era,
