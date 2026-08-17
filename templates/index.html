@@ -372,62 +372,76 @@
       document.getElementById('lbl-econ').innerText = w.econPct + '%';
     }
 
-    function recalculateLocalCPSI() {
-      const w = currentWeights();
-      const epcMap = {'A': 0.0, 'B': 0.1, 'C': 0.3, 'D': 0.5, 'E': 0.7, 'F': 0.9, 'G': 1.0};
-      const source = map.getSource('parcels');
+   function recalculateLocalCPSI() {
+  const w = currentWeights();
+  const epcMap = {'A': 0.0, 'B': 0.1, 'C': 0.3, 'D': 0.5, 'E': 0.7, 'F': 0.9, 'G': 1.0};
+  const source = map.getSource('parcels');
 
-      lastParcelFeatures.forEach(f => {
-        const p = f.properties;
-        let composite, rag;
+  lastParcelFeatures.forEach(f => {
+    const p = f.properties;
+    let composite, rag;
 
-        if (p.has_recorded_covenant || p.in_flood_zone_3) {
-          composite = 1.00;
-          rag = "RED";
-        } else {
-          const envSub = epcMap[(p.epc_rating || '').toUpperCase()] ?? 0.5;
+    // Stage 1 Circuit Breaker
+    if (p.has_recorded_covenant || p.in_flood_zone_3) {
+      composite = 1.00;
+      rag = "RED";
+    } else {
+      // Tier 1 — Legal Sub-Score
+      const legalSub = (p.tenure === 'LH') ? 0.4 : (p.tenure ? 0.1 : 0.0);
 
-          let econSub = 0.2;
-          const era = p.dominant_building_era;
-          if (era === 'A') econSub = 1.00;
-          else if (['B', 'C', 'D'].includes(era)) econSub = 0.75;
-          else if (['E', 'F', 'G'].includes(era)) econSub = 0.50;
-          else if (['H', 'I', 'J'].includes(era)) econSub = 0.25;
-          else if (['K', 'L'].includes(era)) econSub = 0.00;
+      // Tier 2 — Spatial & Environmental Hazard Sub-Score (Flood Risk)
+      const envSub = p.in_flood_zone_3 ? 1.0 : 0.0;
 
-          const legalSub = (p.tenure === 'LH') ? 0.4 : 0.1;
+      // Tier 3 — Structural & Energy Performance Sub-Score (EPC + Building Era)
+      const epcVal = epcMap[(p.epc_rating || '').toUpperCase()];
+      let eraVal = null;
+      const era = p.dominant_building_era;
+      if (era === 'A') eraVal = 1.00;
+      else if (['B', 'C', 'D'].includes(era)) eraVal = 0.75;
+      else if (['E', 'F', 'G'].includes(era)) eraVal = 0.50;
+      else if (['H', 'I', 'J'].includes(era)) eraVal = 0.25;
+      else if (['K', 'L'].includes(era)) eraVal = 0.00;
 
-          composite = (w.legal * legalSub) + (w.env * envSub) + (w.econ * econSub);
-          composite = Math.round(Math.max(0.0, Math.min(composite, 1.0)) * 1000) / 1000;
-          rag = composite >= 0.75 ? "RED" : composite >= 0.40 ? "AMBER" : "GREEN";
-        }
-
-        p.cpsi_score = composite;
-        p.rag_status = rag;
-
-        if (source && f.id !== undefined && f.id !== null) {
-          map.setFeatureState({ source: 'parcels', id: f.id }, { rag_status: rag });
-        }
-
-        if (activeProperty && activeProperty.uprn === p.uprn) {
-            const sidebarBadge = document.getElementById('cpsi-badge');
-            if (sidebarBadge) {
-                sidebarBadge.innerText = composite.toFixed(2);
-                sidebarBadge.className = `text-xs font-bold font-data ${
-                    rag === "GREEN" ? "text-emerald-400" : 
-                    rag === "AMBER" ? "text-amber-400" : 
-                    "text-red-500"
-                }`;
-                updateCpsiGauge(composite, rag);
-            }
-        }
-      });
-
-      renderDataTable();
-      if (activeProperty) {
-        fetchReport(activeProperty.uprn);
+      let econSub = 0.0;
+      if (epcVal !== undefined && eraVal !== null) {
+        econSub = (epcVal + eraVal) / 2.0;
+      } else if (epcVal !== undefined) {
+        econSub = epcVal;
+      } else if (eraVal !== null) {
+        econSub = eraVal;
       }
+
+      composite = (w.legal * legalSub) + (w.env * envSub) + (w.econ * econSub);
+      composite = Math.round(Math.max(0.0, Math.min(composite, 1.0)) * 1000) / 1000;
+      rag = composite >= 0.75 ? "RED" : composite >= 0.40 ? "AMBER" : "GREEN";
     }
+
+    p.cpsi_score = composite;
+    p.rag_status = rag;
+
+    if (source && f.id !== undefined && f.id !== null) {
+      map.setFeatureState({ source: 'parcels', id: f.id }, { rag_status: rag });
+    }
+
+    if (activeProperty && activeProperty.uprn === p.uprn) {
+        const sidebarBadge = document.getElementById('cpsi-badge');
+        if (sidebarBadge) {
+            sidebarBadge.innerText = composite.toFixed(2);
+            sidebarBadge.className = `text-xs font-bold font-data ${
+                rag === "GREEN" ? "text-emerald-400" : 
+                rag === "AMBER" ? "text-amber-400" : 
+                "text-red-500"
+            }`;
+            updateCpsiGauge(composite, rag);
+        }
+    }
+  });
+
+  renderDataTable();
+  if (activeProperty) {
+    fetchReport(activeProperty.uprn);
+  }
+}
 
     ['weight-legal', 'weight-env', 'weight-econ'].forEach(id => {
       document.getElementById(id).addEventListener('input', () => {
@@ -964,41 +978,41 @@
     });
 
     document.getElementById('btn-print').addEventListener('click', () => {
-      const p = activeProperty;
-      if (!p) { showStatus('Select a property first.', true); return; }
+  const p = activeProperty;
+  if (!p) { showStatus('Select a property first.', true); return; }
 
-      const pw = window.open('', '_blank', 'width=900,height=1100');
-      if (!pw) { showStatus('Popup blocked — allow popups for this site to generate the report.', true); return; }
+  const pw = window.open('', '_blank', 'width=900,height=1100');
+  if (!pw) { showStatus('Popup blocked — allow popups for this site to generate the report.', true); return; }
 
-      const t1 = p?.tiers?.tier_1_legal;
-      const t2 = p?.tiers?.tier_2_environmental;
-      const t3 = p?.tiers?.tier_3_structural;
-      
-      const ragColor = p?.rag_status === 'RED' ? '#dc2626' : p?.rag_status === 'AMBER' ? '#d97706' : '#059669';
-      const ragBg = p?.rag_status === 'RED' ? '#fef2f2' : p?.rag_status === 'AMBER' ? '#fffbeb' : '#f0fdf4';
-      
-      let actionText = "";
-      if (p?.rag_status === 'RED') {
-        actionText = "CRITICAL IMPEDIMENT DETECTED. Immediate legal or structural remediation required. Asset fails Stage 1 gate parameters or presents high Whole Life Cycle (WLC) friction. Not recommended for automated acquisition without manual title clearance.";
-      } else if (p?.rag_status === 'AMBER') {
-        actionText = "MODERATE RISK / RETROFIT OPPORTUNITY. Asset exhibits manageable headroom or tenure restrictions. Suitable for value-add strategy (e.g. EPC thermal upgrade from E/F/G to B/C). Proceed subject to standard desktop due diligence.";
-      } else {
-        const titleVerified = t3?.is_verified !== false;
-        actionText = titleVerified
-          ? "LOW RISK / COMPLIANT ASSET. Clear title, favorable tenure structure, and acceptable energy profile detected. Approved for fast-track portfolio aggregation or institutional acquisition."
-          : "LOW RISK ON SCORED FACTORS. Energy and structural profile score low risk, but Land Registry title/covenant data has not been sourced for this asset — confirm title status manually before treating this as a compliant asset.";
-      }
+  const legalTier = p?.tiers?.tier_1_legal;
+  const envTier = p?.tiers?.tier_2_environmental;
+  const structTier = p?.tiers?.tier_3_structural;
+  
+  const ragColor = p?.rag_status === 'RED' ? '#dc2626' : p?.rag_status === 'AMBER' ? '#d97706' : '#059669';
+  const ragBg = p?.rag_status === 'RED' ? '#fef2f2' : p?.rag_status === 'AMBER' ? '#fffbeb' : '#f0fdf4';
+  
+  let actionText = "";
+  if (p?.rag_status === 'RED') {
+    actionText = "CRITICAL IMPEDIMENT DETECTED. Immediate legal or structural remediation required. Asset fails Stage 1 gate parameters or presents high Whole Life Cycle (WLC) friction. Not recommended for automated acquisition without manual title clearance.";
+  } else if (p?.rag_status === 'AMBER') {
+    actionText = "MODERATE RISK / RETROFIT OPPORTUNITY. Asset exhibits manageable headroom or tenure restrictions. Suitable for value-add strategy (e.g. EPC thermal upgrade from E/F/G to B/C). Proceed subject to standard desktop due diligence.";
+  } else {
+    const titleVerified = legalTier?.is_verified !== false;
+    actionText = titleVerified
+      ? "LOW RISK / COMPLIANT ASSET. Clear title, favorable tenure structure, and acceptable energy profile detected. Approved for fast-track portfolio aggregation or institutional acquisition."
+      : "LOW RISK ON SCORED FACTORS. Energy and structural profile score low risk, but Land Registry title/covenant data has not been sourced for this asset — confirm title status manually before treating this as a compliant asset.";
+  }
 
-      const provenanceRegistries = [];
-      if (t1?.epc_rating) provenanceRegistries.push('DLUHC EPC Register (2026)');
-      if (t2?.is_verified) provenanceRegistries.push('Environment Agency Flood Map for Planning');
-      if (t3?.is_verified) provenanceRegistries.push('HM Land Registry Title Registers');
-      if (p?.inspireid) provenanceRegistries.push('Ordnance Survey MasterMap Highways');
-      const provenanceText = provenanceRegistries.length
-        ? `Verified against ${provenanceRegistries.join(', ')}. Fields marked "Not sourced" / "NOT VERIFIED" above were not covered by this check.`
-        : 'No registry lineage could be verified for this asset from currently sourced data — desktop assessment only.';
+  const provenanceRegistries = [];
+  if (structTier?.epc_rating) provenanceRegistries.push('DLUHC EPC Register (2026)');
+  if (envTier?.is_verified) provenanceRegistries.push('Environment Agency Flood Map for Planning');
+  if (legalTier?.is_verified) provenanceRegistries.push('HM Land Registry Title Registers');
+  if (p?.inspireid) provenanceRegistries.push('Ordnance Survey MasterMap Highways');
+  const provenanceText = provenanceRegistries.length
+    ? `Verified against ${provenanceRegistries.join(', ')}. Fields marked "Not sourced" / "NOT VERIFIED" above were not covered by this check.`
+    : 'No registry lineage could be verified for this asset from currently sourced data — desktop assessment only.';
 
-      const html = `<!DOCTYPE html>
+  const html = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -1046,10 +1060,29 @@
 
   <div class="callout">
     <div class="callout-title">Methodology &amp; Definition</div>
-    <strong>Composite Property Suitability Index (CPSI):</strong> Evaluates spatial assets through a two-stage matrix. <em>Stage 1</em> enforces strict legal &amp; environmental gates (Flood Zone 3, Restrictive Covenants). <em>Stage 2</em> applies compensatory Whole Life Cycle (WLC) weighting across Legal, Environmental, and Economic dimensions.
+    <strong>Composite Property Suitability Index (CPSI):</strong> Evaluates spatial assets through a two-stage matrix. <em>Stage 1</em> enforces strict legal &amp; environmental gates (Flood Zone 3, Restrictive Covenants). <em>Stage 2</em> applies compensatory Whole Life Cycle (WLC) weighting across Legal, Environmental, and Structural dimensions.
   </div>
 
-  <div class="section-title">Tier 1 — Structural &amp; Energy Performance</div>
+  <div class="section-title">Tier 1 &amp; Tier 2 — Legal Title &amp; Environmental Hazards</div>
+  <table class="audit-table">
+    <tr>
+      <th>Dimension</th>
+      <th>Status / Class</th>
+      <th>Details &amp; Restrictions</th>
+    </tr>
+    <tr>
+      <td><strong>Tenure &amp; Legal Title</strong></td>
+      <td><strong>${legalTier?.tenure ?? 'Not sourced'}</strong></td>
+      <td><span class="badge ${legalTier?.is_verified === false ? 'badge-pending' : legalTier?.has_covenant ? 'badge-red' : 'badge-green'}">${legalTier?.status_label ?? 'NOT VERIFIED'}</span> — ${legalTier?.notes ?? ''}</td>
+    </tr>
+    <tr>
+      <td><strong>Environmental Hazards</strong></td>
+      <td><span class="badge ${envTier?.is_verified === false ? 'badge-pending' : envTier?.is_high_risk ? 'badge-red' : 'badge-green'}">${envTier?.status_label ?? 'NOT VERIFIED'}</span></td>
+      <td>${envTier?.notes ?? 'No data.'}</td>
+    </tr>
+  </table>
+
+  <div class="section-title">Tier 3 — Structural &amp; Energy Performance</div>
   <table class="audit-table">
     <tr>
       <th>Dominant Building Era</th>
@@ -1058,32 +1091,13 @@
       <th>Improvement Headroom</th>
     </tr>
     <tr>
-      <td><strong>${t1?.building_era ?? 'Not sourced'}</strong></td>
-      <td><strong>${t1?.epc_rating ?? '—'}</strong></td>
-      <td><strong>${t1?.potential_epc_rating ?? '—'}</strong></td>
-      <td>${t1?.epc_improvement_bands ? t1.epc_improvement_bands + ' Band(s)' : 'None calculated'}</td>
+      <td><strong>${structTier?.building_era ?? 'Not sourced'}</strong></td>
+      <td><strong>${structTier?.epc_rating ?? '—'}</strong></td>
+      <td><strong>${structTier?.potential_epc_rating ?? '—'}</strong></td>
+      <td>${structTier?.epc_improvement_bands ? structTier.epc_improvement_bands + ' Band(s)' : 'None calculated'}</td>
     </tr>
   </table>
-  <p style="font-size: 11px; color: #475569; margin-top: -6px;">${t1?.notes ?? ''}</p>
-
-  <div class="section-title">Tier 2 &amp; Tier 3 — Legal, Environmental &amp; Tenure Assessment</div>
-  <table class="audit-table">
-    <tr>
-      <th>Dimension</th>
-      <th>Status / Class</th>
-      <th>Details &amp; Restrictions</th>
-    </tr>
-    <tr>
-      <td><strong>Environmental Hazards</strong></td>
-      <td><span class="badge ${t2?.is_verified === false ? 'badge-pending' : t2?.is_high_risk ? 'badge-red' : 'badge-green'}">${t2?.status_label ?? 'NOT VERIFIED'}</span></td>
-      <td>${t2?.notes ?? 'No data.'}</td>
-    </tr>
-    <tr>
-      <td><strong>Tenure &amp; Legal Title</strong></td>
-      <td><strong>${t3?.tenure ?? 'Not sourced'}</strong></td>
-      <td><span class="badge ${t3?.is_verified === false ? 'badge-pending' : t3?.has_covenant ? 'badge-red' : 'badge-green'}">${t3?.status_label ?? 'NOT VERIFIED'}</span> — ${t3?.notes ?? ''}</td>
-    </tr>
-  </table>
+  <p style="font-size: 11px; color: #475569; margin-top: -6px;">${structTier?.notes ?? ''}</p>
 
   <div class="callout" style="border-left: 4px solid ${ragColor};">
     <div class="callout-title" style="color:${ragColor};">Investment Implication &amp; Next Steps</div>
@@ -1109,10 +1123,10 @@
 </body>
 </html>`;
 
-      pw.document.open();
-      pw.document.write(html);
-      pw.document.close();
-    });
+  pw.document.open();
+  pw.document.write(html);
+  pw.document.close();
+});
   });
   </script>
 </body>

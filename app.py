@@ -14,9 +14,6 @@ from geoalchemy2.functions import (
     ST_Intersects,
     ST_MakeEnvelope,
     ST_Touches,
-    ST_SetSRID,
-    ST_MakePoint,
-    ST_Centroid,
     ST_SimplifyPreserveTopology 
 )
 
@@ -34,20 +31,35 @@ db_name = os.getenv("DB_NAME", "proptrace_msc")
 encoded_password = urllib.parse.quote_plus(db_password)
 app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{db_user}:{encoded_password}@{db_host}:{db_port}/{db_name}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
 
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_size': 10,
+    'max_overflow': 20,
+    'pool_recycle': 1800,
+    'pool_pre_ping': True  # Recovers from dropped connections without raising 500 errors
+}
+db = SQLAlchemy(app)
 @app.route('/')
 def home():
     return render_template('index.html')
 
-# --- ORM MODELS ---
+# --- ORM MODELS WITH EXPLICIT FOREIGN KEY RELATIONSHIP ---
+class BirminghamGeometry(db.Model):
+    __tablename__ = 'birmingham_polygons'
+    __table_args__ = {'schema': 'geo'}
+    inspireid = db.Column(db.BigInteger, primary_key=True)
+    geometry = db.Column(Geometry(geometry_type='POLYGON', srid=27700))
+
 class BirminghamProperty(db.Model):
     __tablename__ = 'birmingham_properties_master'
     __table_args__ = {'schema': 'core'}
     id = db.Column(db.Integer, primary_key=True)
     uprn = db.Column(db.BigInteger, unique=True, nullable=False)
     postcode = db.Column(db.String(10), nullable=False)
-    inspireid = db.Column(db.BigInteger) 
+    
+    # FK linking tabular attributes to spatial boundaries
+    inspireid = db.Column(db.BigInteger, db.ForeignKey('geo.birmingham_polygons.inspireid')) 
+    
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
     epc_rating = db.Column(db.String(2))
@@ -57,11 +69,8 @@ class BirminghamProperty(db.Model):
     has_recorded_covenant = db.Column(db.Boolean, nullable=True)
     in_flood_zone_3 = db.Column(db.Boolean, nullable=True)
 
-class BirminghamGeometry(db.Model):
-    __tablename__ = 'birmingham_polygons'
-    __table_args__ = {'schema': 'geo'}
-    inspireid = db.Column(db.BigInteger, primary_key=True)
-    geometry = db.Column(Geometry(geometry_type='POLYGON', srid=27700))
+    # Explicit ORM relationship enabling lazy joined loading
+    polygon = db.relationship('BirminghamGeometry', backref=db.backref('properties', lazy='select'))
 
 # --- STAGE 2 WEIGHT PARSING ---
 def parse_weights(args):
@@ -110,14 +119,29 @@ era_map = {
 
 # --- CPSI SCORING ENGINE ---
 def calculate_cpsi_score(prop, legal_weight=0.4, env_weight=0.3, econ_weight=0.3):
-    """Executes two-stage hybrid MCDA and returns score along with full math breakdown."""
+    """
+    Executes two-stage hybrid MCDA and returns score along with full math breakdown.
     
-    # Base sub-scores calculation (Defaults to 0.0 if missing, so unsourced data adds +0.00 risk)
-    epc_map = {'A': 0.0, 'B': 0.1, 'C': 0.3, 'D': 0.5, 'E': 0.7, 'F': 0.9, 'G': 1.0}
-    env_sub_score = epc_map.get((prop.epc_rating or '').upper(), 0.0) if prop.epc_rating else 0.0
+    Tier 1 (Legal): Tenure friction + Restrictive Covenants (Stage 1 Gate)
+    Tier 2 (Environmental): Flood Zone 3 risk (Stage 1 Gate & Tier 2 Env Score)
+    Tier 3 (Structural & Energy / Econ): Combined EPC Rating + Dominant Building Era
+    """
+    
+    # --- TIER 1: LEGAL SUB-SCORE ---
+    legal_sub_score = 0.4 if prop.tenure == 'LH' else (0.1 if prop.tenure else 0.0)
 
+    # --- TIER 2: SPATIAL & ENVIRONMENTAL HAZARD SUB-SCORE (Flood Risk) ---
+    has_flood_risk = getattr(prop, 'in_flood_zone_3', False) is True
+    env_sub_score = 1.0 if has_flood_risk else 0.0
+
+    # --- TIER 3: STRUCTURAL & ENERGY PERFORMANCE SUB-SCORE (EPC + Building Era) ---
+    # 1. EPC Rating Component (0.0 = A, 1.0 = G)
+    epc_map = {'A': 0.0, 'B': 0.1, 'C': 0.3, 'D': 0.5, 'E': 0.7, 'F': 0.9, 'G': 1.0}
+    epc_score = epc_map.get((prop.epc_rating or '').upper(), None) if prop.epc_rating else None
+
+    # 2. Building Era Component (0.00 = Modern, 1.00 = Pre-1900)
     era_code = (prop.dominant_building_era or '').upper().strip()
-    era_score = 0.0
+    era_score = None
     if era_code == 'A':
         era_score = 1.00
     elif era_code in ['B', 'C', 'D']:
@@ -129,18 +153,27 @@ def calculate_cpsi_score(prop, legal_weight=0.4, env_weight=0.3, econ_weight=0.3
     elif era_code in ['K', 'L']:
         era_score = 0.00
 
-    econ_sub_score = min(era_score, 1.0)
-    legal_sub_score = 0.4 if prop.tenure == 'LH' else (0.1 if prop.tenure else 0.0)
+    # Combine EPC & Building Era into Tier 3 Sub-Score
+    if epc_score is not None and era_score is not None:
+        econ_sub_score = round((epc_score + era_score) / 2.0, 3)
+    elif epc_score is not None:
+        econ_sub_score = epc_score
+    elif era_score is not None:
+        econ_sub_score = era_score
+    else:
+        econ_sub_score = 0.0
 
-    # Stage 2 Weighted Contributions
+    # --- STAGE 2 WEIGHTED CONTRIBUTIONS ---
     legal_contrib = round(legal_sub_score * legal_weight, 3)
     env_contrib = round(env_sub_score * env_weight, 3)
     econ_contrib = round(econ_sub_score * econ_weight, 3)
     uncapped_sum = round(legal_contrib + env_contrib + econ_contrib, 3)
 
-    # STAGE 1 (Non-Compensatory Gates) Check
+    # --- STAGE 1 (Non-Compensatory Gates) CHECK ---
+    has_covenant = getattr(prop, 'has_recorded_covenant', False) is True
     is_override = False
-    if getattr(prop, 'has_recorded_covenant', False) or getattr(prop, 'in_flood_zone_3', False):
+    
+    if has_covenant or has_flood_risk:
         composite_risk = 1.00
         rag = "RED"
         is_override = True
@@ -164,7 +197,11 @@ def calculate_cpsi_score(prop, legal_weight=0.4, env_weight=0.3, econ_weight=0.3
         "sub_scores": {
             "legal": legal_sub_score,
             "env": env_sub_score,
-            "econ": econ_sub_score
+            "econ": econ_sub_score,
+            "tier3_breakdown": {
+                "epc_score": epc_score,
+                "era_score": era_score
+            }
         },
         "contributions": {
             "legal": legal_contrib,
