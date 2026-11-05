@@ -13,4 +13,11 @@ __pycache__/
 .vscode/
 .idea/
 
+# Secrets — never push credentials
+.env
+.env.local
+
 data/
+
+# Pandoc scratch file used by export_dissertation.py
+docs/dissertation/_export_proptrace.md
